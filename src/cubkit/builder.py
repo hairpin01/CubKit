@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 
 from .bundler import build_zip_payload
 from .collector import collect_bundle_files, validate_bundle_files
 from .manifest import load_manifest
 from .renderer import default_artifact_stem, render_module
+
+BuildProgress = Callable[[Path, int, int], None]
 
 
 def check_project(project_dir: Path) -> int:
@@ -19,13 +22,25 @@ def check_project(project_dir: Path) -> int:
     return len(files)
 
 
-def build_project(project_dir: Path, output: Path | None = None) -> Path:
+def build_project(project_dir: Path, output: Path | None = None, progress: BuildProgress | None = None) -> Path:
     """Build *project_dir* and return the generated artifact path."""
 
     project_dir = project_dir.resolve()
     manifest = load_manifest(project_dir)
     files = collect_bundle_files(manifest)
+    total = 1 + len(files)
+    done = 0
+
+    def report(path: Path) -> None:
+        nonlocal done
+        done += 1
+        if progress is not None:
+            progress(path, done, total)
+
+    report(manifest.entrypoint)
     validate_bundle_files(files)
+    for item in files:
+        report(item.source)
     payload = build_zip_payload(files)
     rendered = render_module(manifest, payload)
 

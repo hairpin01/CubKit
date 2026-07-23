@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 import sys
 import textwrap
+import time
 
 from . import __version__
 from .builder import build_project, check_project
@@ -68,9 +69,62 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
-    output = build_project(args.path, args.output)
+    project_dir = args.path.resolve()
+    reporter = _ProgressReporter(project_dir)
+    output = build_project(project_dir, args.output, progress=reporter.ok)
+    reporter.finish()
     print(f"built: {output}")
     return 0
+
+
+class _ProgressReporter:
+    """Small non-interactive progress printer for CubKit builds."""
+
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _BAR_WIDTH = 60
+
+    def __init__(self, project_dir: Path) -> None:
+        self.project_dir = project_dir
+        self.started = time.monotonic()
+        self._progress_visible = False
+
+    def ok(self, path: Path, index: int, total: int) -> None:
+        if self._progress_visible:
+            sys.stdout.write("\r\033[2K")
+        sys.stdout.write(f"OK {self._display_path(path)}\n")
+        sys.stdout.write(self._progress_line(index, total))
+        sys.stdout.flush()
+        self._progress_visible = True
+
+    def finish(self) -> None:
+        if self._progress_visible:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            self._progress_visible = False
+
+    def _display_path(self, path: Path) -> str:
+        try:
+            return path.resolve().relative_to(self.project_dir).as_posix()
+        except ValueError:
+            return path.as_posix()
+
+    def _progress_line(self, index: int, total: int) -> str:
+        total = max(total, 1)
+        elapsed = time.monotonic() - self.started
+        spinner = self._SPINNER[index % len(self._SPINNER)]
+        filled = max(1, int(self._BAR_WIDTH * index / total))
+        filled = min(filled, self._BAR_WIDTH)
+        if filled >= self._BAR_WIDTH:
+            bar = "#" * self._BAR_WIDTH
+        else:
+            bar = "#" * filled + ">" + "-" * (self._BAR_WIDTH - filled - 1)
+        return f"{spinner} {_format_elapsed(elapsed)} [{bar}] {index}/{total}"
+
+
+def _format_elapsed(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    return f"{seconds:.0f}s"
 
 
 def _write_new(path: Path, content: str) -> None:
