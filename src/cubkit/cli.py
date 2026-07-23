@@ -93,6 +93,8 @@ def _manifest_template(module_id: str, name: str, package_name: str) -> str:
         id = {module_id!r}
         name = {name!r}
         version = "0.1.0"
+        author = "unknown"
+        description = "Built with CubKit"
         entrypoint = "main.py"
         package = {package_name!r}
         assets = "assets"

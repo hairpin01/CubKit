@@ -46,10 +46,34 @@ my_module/
 id = "my_module"
 name = "My Module"
 version = "0.1.0"
+author = "unknown"
+description = "Built with CubKit"
 entrypoint = "main.py"
 package = "my_module_lib"
 assets = "assets"
+# Optional root-private files for `from .utils import ...` in the entrypoint.
+sources = ["utils.py"]
 ```
+
+CubKit writes MCUB metadata comments into the generated main artifact before the
+bootstrap code, for example `# name:`, `# version:` and optional `# author:`,
+`# description:`, `# requires:`, `# banner_url:` and `# scop:` lines. This keeps
+function-style modules loadable by MCUB without manually duplicating manifest
+metadata in `main.py`.
+
+For class-style modules that inherit from MCUB `ModuleBase`/`Module`, CubKit uses
+the literal class `name = "..."` attribute for `# name:` when it is present. This
+keeps MCUB package metadata, the generated filename and the class-style module
+name aligned.
+
+Entrypoints may use private relative imports for bundled helpers:
+
+```python
+from .utils import helper
+```
+
+Add those helper files to `sources`. CubKit loads them through a private package
+name, so they do not collide with MCUB's global `utils`, `lib`, or other modules.
 
 ## Commands
 

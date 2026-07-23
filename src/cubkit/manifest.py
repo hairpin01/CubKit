@@ -11,7 +11,6 @@ from .errors import ManifestError
 
 MANIFEST_NAMES = ("cubkit.toml", "mcub.toml")
 MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.\-_]+)?$")
 
 
 @dataclass(frozen=True)
@@ -20,10 +19,16 @@ class Manifest:
 
     module_id: str
     name: str
-    version: str
     entrypoint: Path
+    version: str | None = None
+    author: str = "unknown"
+    description: str = ""
     package: Path | None = None
     assets: Path | None = None
+    sources: tuple[Path, ...] = ()
+    requires: tuple[str, ...] = ()
+    banner_url: str | None = None
+    scop: str | None = None
 
 
 def find_manifest(project_dir: Path) -> Path:
@@ -48,16 +53,20 @@ def load_manifest(project_dir: Path) -> Manifest:
         raise ManifestError(f"invalid TOML in {manifest_path}: {exc}") from exc
 
     module_id = _required_str(data, "id")
-    name = _required_str(data, "name")
-    version = _required_str(data, "version")
+    name = _optional_str(data, "name", default=module_id)
+    version = _optional_str(data, "version", default=None)
+    author = _optional_str(data, "author", default="unknown")
+    description = _optional_str(data, "description", default="")
     entrypoint = _project_path(project_dir, _required_str(data, "entrypoint"), "entrypoint")
     package = _optional_project_path(project_dir, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
+    sources = _optional_project_paths(project_dir, data.get("sources"), "sources")
+    requires = _optional_str_tuple(data, "requires")
+    banner_url = _optional_str(data, "banner_url", default=None)
+    scop = _optional_str(data, "scop", default=None)
 
     if not MODULE_ID_RE.fullmatch(module_id):
         raise ManifestError("id must match /^[a-z][a-z0-9_]{1,31}$/")
-    if not VERSION_RE.fullmatch(version):
-        raise ManifestError("version must be semantic, for example 1.0.0")
     if not entrypoint.is_file():
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
     if package is not None and not package.is_dir():
@@ -70,9 +79,15 @@ def load_manifest(project_dir: Path) -> Manifest:
         module_id=module_id,
         name=name,
         version=version,
+        author=author,
+        description=description,
         entrypoint=entrypoint,
         package=package,
         assets=assets,
+        sources=sources,
+        requires=requires,
+        banner_url=banner_url,
+        scop=scop,
     )
 
 
@@ -83,12 +98,61 @@ def _required_str(data: dict[str, object], key: str) -> str:
     return value.strip()
 
 
+def _optional_str(data: dict[str, object], key: str, *, default: str | None) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, str) or not value.strip():
+        raise ManifestError(f"{key!r} must be a non-empty string when provided")
+    return value.strip()
+
+
+def _optional_str_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",")]
+    elif isinstance(value, list):
+        items = []
+        for item in value:
+            if not isinstance(item, str):
+                raise ManifestError(f"{key!r} must contain only strings")
+            items.append(item.strip())
+    else:
+        raise ManifestError(f"{key!r} must be a string or list of strings")
+    if any(not item for item in items):
+        raise ManifestError(f"{key!r} must not contain empty values")
+    return tuple(items)
+
+
 def _optional_project_path(project_dir: Path, value: object, field: str) -> Path | None:
     if value is None:
         return None
     if not isinstance(value, str) or not value.strip():
         raise ManifestError(f"{field!r} must be a non-empty string when provided")
     return _project_path(project_dir, value.strip(), field)
+
+
+def _optional_project_paths(project_dir: Path, value: object, field: str) -> tuple[Path, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw_items = [value]
+    elif isinstance(value, list):
+        raw_items = value
+    else:
+        raise ManifestError(f"{field!r} must be a string or list of strings")
+
+    paths: list[Path] = []
+    for item in raw_items:
+        if not isinstance(item, str) or not item.strip():
+            raise ManifestError(f"{field!r} must contain non-empty strings")
+        path = _project_path(project_dir, item.strip(), field)
+        if not path.exists():
+            raise ManifestError(f"{field} path does not exist: {path}")
+        paths.append(path)
+    return tuple(paths)
 
 
 def _project_path(project_dir: Path, value: str, field: str) -> Path:
