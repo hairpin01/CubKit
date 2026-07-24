@@ -36,16 +36,22 @@ flowchart TD
 ```text
 my_module/
   cubkit.toml
-  main.py
-  utils.py
+  src/
+    main.py
+    utils.py
 ```
 
 `cubkit.toml` can be tiny:
 
 ```toml
 id = "my_module"
+src = "src"
 entrypoint = "main.py"
 ```
+
+When `src = "src"` is set, code paths (`entrypoint`, `package`, `sources`) are
+resolved inside `src/`. This keeps build config in the project root while module
+code lives in `src/`.
 
 Optional metadata:
 
@@ -190,17 +196,19 @@ Project layout:
 ```text
 cubkit_full_example/
   cubkit.toml
-  main.py
-  test_module/
-    __init__.py
-    event.py
-    custom_validator.py
+  src/
+    main.py
+    test_module/
+      __init__.py
+      event.py
+      custom_validator.py
 ```
 
 `cubkit.toml`:
 
 ```toml
 id = "cubkit_full_example"
+src = "src"
 entrypoint = "main.py"
 package = "test_module"
 sign = true

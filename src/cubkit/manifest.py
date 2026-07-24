@@ -19,6 +19,7 @@ class Manifest:
 
     module_id: str
     name: str
+    source_root: Path
     entrypoint: Path
     version: str | None = None
     author: str = "unknown"
@@ -58,12 +59,13 @@ def load_manifest(project_dir: Path) -> Manifest:
     version = _optional_str(data, "version", default=None)
     author = _optional_str(data, "author", default="unknown")
     description = _optional_str(data, "description", default="")
+    source_root = _optional_project_path(project_dir, data.get("src"), "src") or project_dir
     entrypoint = _project_path(
-        project_dir, _required_str(data, "entrypoint"), "entrypoint"
+        source_root, _required_str(data, "entrypoint"), "entrypoint"
     )
-    package = _optional_project_paths(project_dir, data.get("package"), "package")
+    package = _optional_project_paths(source_root, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
-    sources = _optional_project_paths(project_dir, data.get("sources"), "sources")
+    sources = _optional_project_paths(source_root, data.get("sources"), "sources")
     requires = _optional_str_tuple(data, "requires")
     banner_url = _optional_str(data, "banner_url", default=None)
     scop = _optional_str(data, "scop", default=None)
@@ -71,6 +73,8 @@ def load_manifest(project_dir: Path) -> Manifest:
 
     if not MODULE_ID_RE.fullmatch(module_id):
         raise ManifestError("id must match /^[a-z][a-z0-9_]{1,31}$/")
+    if not source_root.is_dir():
+        raise ManifestError(f"src does not exist or is not a directory: {source_root}")
     if not entrypoint.is_file():
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
     for package_path in package:
@@ -85,6 +89,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     return Manifest(
         module_id=module_id,
         name=name,
+        source_root=source_root,
         version=version,
         author=author,
         description=description,

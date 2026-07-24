@@ -35,10 +35,13 @@ The build output is written to `my_module/dist/<module_id>.py` by default.
 ```text
 my_module/
   cubkit.toml
-  main.py
-  my_module_lib/
-    __init__.py
-    utils.py
+  src/
+    main.py
+    mixin_command.py
+    mixin_callback.py
+    my_module_lib/
+      __init__.py
+      utils.py
   assets/
     icon.png
 ```
@@ -51,6 +54,8 @@ name = "My Module"
 version = "0.1.0"
 author = "unknown"
 description = "Built with CubKit"
+# Optional source root for code files.
+src = "src"
 entrypoint = "main.py"
 # One package dir or several package dirs are supported.
 package = "my_module_lib"
@@ -61,6 +66,9 @@ sources = ["utils.py"]
 # Optional deterministic build signature comments.
 sign = true
 ```
+
+When `src = "src"` is set, code paths like `entrypoint`, `package` and `sources`
+are resolved inside `src/`. Non-code assets remain relative to the project root.
 
 CubKit writes MCUB metadata comments into the generated main artifact before the
 bootstrap code, for example `# name:`, `# version:` and optional `# author:`,

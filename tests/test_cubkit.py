@@ -342,6 +342,48 @@ class CubKitTest(unittest.TestCase):
             self.assertIn("-> main.py:1", text)
             self.assertIn("#   - signed_lib/helper.py -> helper.py:1", text)
 
+    def test_src_root_places_code_under_src_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "src_root_mod"
+            source_root = project / "src"
+            source_root.mkdir(parents=True)
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "src_root_mod"',
+                        'src = "src"',
+                        'entrypoint = "main.py"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (source_root / "mixin_command.py").write_text("COMMAND = 'cmd'\n", encoding="utf-8")
+            (source_root / "mixin_callback.py").write_text("CALLBACK = 'callback'\n", encoding="utf-8")
+            (source_root / "main.py").write_text(
+                "from .mixin_command import COMMAND\n"
+                "from .mixin_callback import CALLBACK\n\n"
+                "VALUE = COMMAND + ':' + CALLBACK\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+
+            self.assertIn("# ---- CubKit entrypoint: main.py ----", text)
+            self.assertIn("#   - mixin_callback.py -> mixin_callback.py:1", text)
+            self.assertIn("#   - mixin_command.py -> mixin_command.py:1", text)
+
+            spec = importlib.util.spec_from_file_location("SrcRootMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["SrcRootMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "cmd:callback")
+            finally:
+                sys.modules.pop("SrcRootMod", None)
+
 
 if __name__ == "__main__":
     unittest.main()
