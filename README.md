@@ -5,6 +5,9 @@ CubKit is a small toolkit for MCUB module development.
 The first supported workflow is a builder that packs a multi-file module project
 into a single `.py` artifact that can still be loaded by MCUB as a normal module.
 
+Full usage guide with Mermaid build flow, main/lib examples and best practices:
+[doc/index.md](doc/index.md).
+
 ## Install
 
 ```bash
