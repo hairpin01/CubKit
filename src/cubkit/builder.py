@@ -22,7 +22,9 @@ def check_project(project_dir: Path) -> int:
     return len(files)
 
 
-def build_project(project_dir: Path, output: Path | None = None, progress: BuildProgress | None = None) -> Path:
+def build_project(
+    project_dir: Path, output: Path | None = None, progress: BuildProgress | None = None
+) -> Path:
     """Build *project_dir* and return the generated artifact path."""
 
     project_dir = project_dir.resolve()
@@ -44,7 +46,11 @@ def build_project(project_dir: Path, output: Path | None = None, progress: Build
     payload = build_zip_payload(files)
     rendered = render_module(manifest, payload, bundle_files=files)
 
-    output_path = output.resolve() if output is not None else project_dir / "dist" / f"{default_artifact_stem(manifest)}.py"
+    output_path = (
+        output.resolve()
+        if output is not None
+        else project_dir / "dist" / f"{default_artifact_stem(manifest)}.py"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
     return output_path

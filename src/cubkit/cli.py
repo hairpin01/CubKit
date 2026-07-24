@@ -26,20 +26,30 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _make_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="cubkit", description="Toolkit for MCUB module development.")
+    parser = argparse.ArgumentParser(
+        prog="cubkit", description="Toolkit for MCUB module development."
+    )
     parser.add_argument("--version", action="version", version=f"cubkit {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    init_parser = subparsers.add_parser("init", help="create a starter MCUB module project")
+    init_parser = subparsers.add_parser(
+        "init", help="create a starter MCUB module project"
+    )
     init_parser.add_argument("path", type=Path)
-    init_parser.add_argument("--id", dest="module_id", help="module id; defaults to the directory name")
+    init_parser.add_argument(
+        "--id", dest="module_id", help="module id; defaults to the directory name"
+    )
     init_parser.set_defaults(func=_cmd_init)
 
-    check_parser = subparsers.add_parser("check", help="validate a CubKit module project")
+    check_parser = subparsers.add_parser(
+        "check", help="validate a CubKit module project"
+    )
     check_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     check_parser.set_defaults(func=_cmd_check)
 
-    build_parser = subparsers.add_parser("build", help="build a single-file MCUB module artifact")
+    build_parser = subparsers.add_parser(
+        "build", help="build a single-file MCUB module artifact"
+    )
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
     build_parser.set_defaults(func=_cmd_build)
@@ -54,9 +64,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
     (project_dir / package_name).mkdir(exist_ok=True)
     (project_dir / "assets").mkdir(exist_ok=True)
 
-    _write_new(project_dir / "cubkit.toml", _manifest_template(module_id, project_dir.name, package_name))
+    _write_new(
+        project_dir / "cubkit.toml",
+        _manifest_template(module_id, project_dir.name, package_name),
+    )
     _write_new(project_dir / "main.py", _entrypoint_template(package_name))
-    _write_new(project_dir / package_name / "__init__.py", '"""Private package for this MCUB module."""\n')
+    _write_new(
+        project_dir / package_name / "__init__.py",
+        '"""Private package for this MCUB module."""\n',
+    )
     _write_new(project_dir / package_name / "utils.py", _utils_template())
     print(f"created CubKit module project: {project_dir}")
     return 0
@@ -142,8 +158,7 @@ def _normalize_module_id(value: str) -> str:
 
 
 def _manifest_template(module_id: str, name: str, package_name: str) -> str:
-    return textwrap.dedent(
-        f'''
+    return textwrap.dedent(f"""
         id = {module_id!r}
         name = {name!r}
         version = "0.1.0"
@@ -152,13 +167,11 @@ def _manifest_template(module_id: str, name: str, package_name: str) -> str:
         entrypoint = "main.py"
         package = {package_name!r}
         assets = "assets"
-        '''
-    ).lstrip()
+        """).lstrip()
 
 
 def _entrypoint_template(package_name: str) -> str:
-    return textwrap.dedent(
-        f'''
+    return textwrap.dedent(f"""
         from {package_name}.utils import hello
 
 
@@ -166,17 +179,14 @@ def _entrypoint_template(package_name: str) -> str:
         # CubKit keeps it as the entrypoint and embeds sibling package files.
         def cubkit_demo() -> str:
             return hello()
-        '''
-    ).lstrip()
+        """).lstrip()
 
 
 def _utils_template() -> str:
-    return textwrap.dedent(
-        '''
+    return textwrap.dedent("""
         def hello() -> str:
             return "Hello from CubKit"
-        '''
-    ).lstrip()
+        """).lstrip()
 
 
 if __name__ == "__main__":

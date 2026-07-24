@@ -24,7 +24,9 @@ class EntrypointMetadata:
     version: str | None = None
 
 
-def render_module(manifest: Manifest, payload: bytes, *, bundle_files: Sequence[BundleFile] = ()) -> str:
+def render_module(
+    manifest: Manifest, payload: bytes, *, bundle_files: Sequence[BundleFile] = ()
+) -> str:
     """Render a generated module from *manifest* and embedded *payload*."""
 
     raw_entrypoint_source = manifest.entrypoint.read_text(encoding="utf-8")
@@ -32,8 +34,14 @@ def render_module(manifest: Manifest, payload: bytes, *, bundle_files: Sequence[
     entrypoint_metadata = read_entrypoint_metadata(entrypoint_source)
     payload_hash = hashlib.sha256(payload).hexdigest()
     encoded_payload = base64.b85encode(payload).decode("ascii") if payload else ""
-    source_hash = _source_sha256(manifest.entrypoint, raw_entrypoint_source, bundle_files, payload_hash)
-    signature = _build_signature(manifest.module_id, source_hash, payload_hash) if manifest.sign else None
+    source_hash = _source_sha256(
+        manifest.entrypoint, raw_entrypoint_source, bundle_files, payload_hash
+    )
+    signature = (
+        _build_signature(manifest.module_id, source_hash, payload_hash)
+        if manifest.sign
+        else None
+    )
     metadata = _render_metadata_header(
         manifest,
         name=entrypoint_metadata.name or manifest.name,
@@ -76,7 +84,9 @@ def default_artifact_stem(manifest: Manifest) -> str:
     return entrypoint_metadata.name or manifest.module_id
 
 
-def _render_metadata_header(manifest: Manifest, *, name: str, version: str | None) -> str:
+def _render_metadata_header(
+    manifest: Manifest, *, name: str, version: str | None
+) -> str:
     lines = [f"# name: {name}"]
     if version:
         lines.append(f"# version: {version}")
@@ -109,7 +119,9 @@ def _render_build_info(
     ]
     if signature:
         lines.append(f"# CubKit signature: {signature}")
-        lines.append("# CubKit signature algorithm: sha256(cubkit-sign-v1 + module id + source sha256 + payload sha256)")
+        lines.append(
+            "# CubKit signature algorithm: sha256(cubkit-sign-v1 + module id + source sha256 + payload sha256)"
+        )
     lines.extend(
         [
             "# CubKit source map:",
@@ -117,7 +129,9 @@ def _render_build_info(
         ]
     )
     if bundle_files:
-        lines.append("# - bundled files are extracted from the CubKit payload at import time:")
+        lines.append(
+            "# - bundled files are extracted from the CubKit payload at import time:"
+        )
     for item in sorted(bundle_files, key=lambda file: file.archive_name):
         lines.append(
             f"#   - {item.archive_name} -> {item.source.name}:1 "
@@ -126,7 +140,12 @@ def _render_build_info(
     return "\n".join(lines) + "\n"
 
 
-def _source_sha256(entrypoint: Path, entrypoint_source: str, bundle_files: Sequence[BundleFile], payload_hash: str) -> str:
+def _source_sha256(
+    entrypoint: Path,
+    entrypoint_source: str,
+    bundle_files: Sequence[BundleFile],
+    payload_hash: str,
+) -> str:
     digest = hashlib.sha256()
     digest.update(b"cubkit-source-v1\0")
     digest.update(entrypoint.name.encode("utf-8"))
@@ -170,7 +189,9 @@ def read_entrypoint_metadata(source: str) -> EntrypointMetadata:
         return EntrypointMetadata(name=header_name, version=header_version)
 
     for node in tree.body:
-        if isinstance(node, ast.ClassDef) and any(_is_module_base(base) for base in node.bases):
+        if isinstance(node, ast.ClassDef) and any(
+            _is_module_base(base) for base in node.bases
+        ):
             return EntrypointMetadata(
                 is_class_style=True,
                 name=_read_class_string_attribute(node, "name") or header_name,
@@ -180,7 +201,11 @@ def read_entrypoint_metadata(source: str) -> EntrypointMetadata:
 
 
 def _read_header_value(source: str, key: str) -> str | None:
-    match = re.search(rf"^\s*#\s*(?:{re.escape(key)}|meta\s+{re.escape(key)})\s*:\s*(.+)$", source, re.MULTILINE | re.IGNORECASE)
+    match = re.search(
+        rf"^\s*#\s*(?:{re.escape(key)}|meta\s+{re.escape(key)})\s*:\s*(.+)$",
+        source,
+        re.MULTILINE | re.IGNORECASE,
+    )
     if match:
         value = match.group(1).strip()
         if value:
@@ -192,12 +217,22 @@ def _read_class_string_attribute(node: ast.ClassDef, attribute: str) -> str | No
     for statement in node.body:
         value: ast.expr | None = None
         if isinstance(statement, ast.Assign):
-            if any(isinstance(target, ast.Name) and target.id == attribute for target in statement.targets):
+            if any(
+                isinstance(target, ast.Name) and target.id == attribute
+                for target in statement.targets
+            ):
                 value = statement.value
         elif isinstance(statement, ast.AnnAssign):
-            if isinstance(statement.target, ast.Name) and statement.target.id == attribute:
+            if (
+                isinstance(statement.target, ast.Name)
+                and statement.target.id == attribute
+            ):
                 value = statement.value
-        if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value.strip():
+        if (
+            isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+            and value.value.strip()
+        ):
             return value.value.strip()
     return None
 
@@ -221,9 +256,17 @@ def _split_future_imports(source: str) -> tuple[str, str]:
     lines = source.splitlines()
     future_ranges: list[tuple[int, int]] = []
     for node in tree.body:
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+        if (
+            isinstance(node, ast.Expr)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
             continue
-        if isinstance(node, ast.ImportFrom) and node.module == "__future__" and node.level == 0:
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "__future__"
+            and node.level == 0
+        ):
             start = node.lineno
             end = getattr(node, "end_lineno", node.lineno)
             future_ranges.append((start, end))
@@ -239,11 +282,19 @@ def _split_future_imports(source: str) -> tuple[str, str]:
         future_lines.extend(lines[start - 1 : end])
         removed_lines.update(range(start, end + 1))
 
-    remaining = [line for index, line in enumerate(lines, start=1) if index not in removed_lines]
+    remaining = [
+        line for index, line in enumerate(lines, start=1) if index not in removed_lines
+    ]
     return "\n".join(future_lines), "\n".join(remaining).lstrip("\n")
 
 
-def _render_bootstrap(module_id: str, payload_hash: str, encoded_payload: str, *, package_dirs: tuple[str, ...]) -> str:
+def _render_bootstrap(
+    module_id: str,
+    payload_hash: str,
+    encoded_payload: str,
+    *,
+    package_dirs: tuple[str, ...],
+) -> str:
     header = f"""# Generated by CubKit. Do not edit this header by hand.
 # CubKit repository: https://github.com/hairpin01/CubKit
 # CubKit build notes:
@@ -254,9 +305,7 @@ def _render_bootstrap(module_id: str, payload_hash: str, encoded_payload: str, *
 """
     if not encoded_payload:
         return (
-            header
-            +
-            f"__cubkit_module_id__ = {module_id!r}\n"
+            header + f"__cubkit_module_id__ = {module_id!r}\n"
             f"__cubkit_package_dirs__ = {package_dirs!r}\n"
             '__cubkit_bundle_sha256__ = ""'
         )

@@ -14,7 +14,9 @@ def build_zip_payload(files: list[BundleFile]) -> bytes:
     """Return deterministic zip bytes for *files*."""
 
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+    with zipfile.ZipFile(
+        buffer, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as archive:
         for item in files:
             info = zipfile.ZipInfo(item.archive_name, ZIP_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED

@@ -58,7 +58,9 @@ def load_manifest(project_dir: Path) -> Manifest:
     version = _optional_str(data, "version", default=None)
     author = _optional_str(data, "author", default="unknown")
     description = _optional_str(data, "description", default="")
-    entrypoint = _project_path(project_dir, _required_str(data, "entrypoint"), "entrypoint")
+    entrypoint = _project_path(
+        project_dir, _required_str(data, "entrypoint"), "entrypoint"
+    )
     package = _optional_project_paths(project_dir, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
     sources = _optional_project_paths(project_dir, data.get("sources"), "sources")
@@ -73,7 +75,9 @@ def load_manifest(project_dir: Path) -> Manifest:
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
     for package_path in package:
         if not package_path.is_dir():
-            raise ManifestError(f"package does not exist or is not a directory: {package_path}")
+            raise ManifestError(
+                f"package does not exist or is not a directory: {package_path}"
+            )
     if assets is not None and not assets.is_dir():
         raise ManifestError(f"assets does not exist or is not a directory: {assets}")
 
@@ -102,7 +106,9 @@ def _required_str(data: dict[str, object], key: str) -> str:
     return value.strip()
 
 
-def _optional_str(data: dict[str, object], key: str, *, default: str | None) -> str | None:
+def _optional_str(
+    data: dict[str, object], key: str, *, default: str | None
+) -> str | None:
     value = data.get(key)
     if value is None:
         return default
@@ -147,7 +153,9 @@ def _optional_project_path(project_dir: Path, value: object, field: str) -> Path
     return _project_path(project_dir, value.strip(), field)
 
 
-def _optional_project_paths(project_dir: Path, value: object, field: str) -> tuple[Path, ...]:
+def _optional_project_paths(
+    project_dir: Path, value: object, field: str
+) -> tuple[Path, ...]:
     if value is None:
         return ()
     if isinstance(value, str):
@@ -184,4 +192,6 @@ def _compile_python(path: Path) -> None:
     try:
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
     except SyntaxError as exc:
-        raise ManifestError(f"syntax error in {path}: {exc.msg} at line {exc.lineno}") from exc
+        raise ManifestError(
+            f"syntax error in {path}: {exc.msg} at line {exc.lineno}"
+        ) from exc

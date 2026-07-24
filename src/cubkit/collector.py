@@ -9,7 +9,15 @@ from pathlib import Path, PurePosixPath
 from .errors import BuildError
 from .manifest import Manifest
 
-EXCLUDED_DIRS = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv"}
+EXCLUDED_DIRS = {
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".venv",
+    "venv",
+}
 EXCLUDED_SUFFIXES = {".pyc", ".pyo", ".session", ".session-journal"}
 EXCLUDED_FILES = {".env"}
 
@@ -38,7 +46,11 @@ def collect_bundle_files(manifest: Manifest) -> list[BundleFile]:
 
 def _collect_source(source: Path) -> list[BundleFile]:
     if source.is_file():
-        return [BundleFile(source=source, archive_name=PurePosixPath(source.name).as_posix())]
+        return [
+            BundleFile(
+                source=source, archive_name=PurePosixPath(source.name).as_posix()
+            )
+        ]
     return _collect_tree(source, source)
 
 
@@ -93,7 +105,9 @@ def _iter_relative_import_paths(tree: ast.AST, base_dir: Path) -> list[Path]:
             for alias in node.names:
                 if alias.name == "*":
                     continue
-                paths.extend(_resolve_relative_module(relative_base, alias.name.split(".")))
+                paths.extend(
+                    _resolve_relative_module(relative_base, alias.name.split("."))
+                )
     return paths
 
 
@@ -152,4 +166,6 @@ def _compile_python(path: Path) -> None:
     try:
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
     except SyntaxError as exc:
-        raise BuildError(f"syntax error in {path}: {exc.msg} at line {exc.lineno}") from exc
+        raise BuildError(
+            f"syntax error in {path}: {exc.msg} at line {exc.lineno}"
+        ) from exc
