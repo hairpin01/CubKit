@@ -23,12 +23,13 @@ class Manifest:
     version: str | None = None
     author: str = "unknown"
     description: str = ""
-    package: Path | None = None
+    package: tuple[Path, ...] = ()
     assets: Path | None = None
     sources: tuple[Path, ...] = ()
     requires: tuple[str, ...] = ()
     banner_url: str | None = None
     scop: str | None = None
+    sign: bool = False
 
 
 def find_manifest(project_dir: Path) -> Path:
@@ -58,19 +59,21 @@ def load_manifest(project_dir: Path) -> Manifest:
     author = _optional_str(data, "author", default="unknown")
     description = _optional_str(data, "description", default="")
     entrypoint = _project_path(project_dir, _required_str(data, "entrypoint"), "entrypoint")
-    package = _optional_project_path(project_dir, data.get("package"), "package")
+    package = _optional_project_paths(project_dir, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
     sources = _optional_project_paths(project_dir, data.get("sources"), "sources")
     requires = _optional_str_tuple(data, "requires")
     banner_url = _optional_str(data, "banner_url", default=None)
     scop = _optional_str(data, "scop", default=None)
+    sign = _optional_bool(data, "sign", default=False)
 
     if not MODULE_ID_RE.fullmatch(module_id):
         raise ManifestError("id must match /^[a-z][a-z0-9_]{1,31}$/")
     if not entrypoint.is_file():
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
-    if package is not None and not package.is_dir():
-        raise ManifestError(f"package does not exist or is not a directory: {package}")
+    for package_path in package:
+        if not package_path.is_dir():
+            raise ManifestError(f"package does not exist or is not a directory: {package_path}")
     if assets is not None and not assets.is_dir():
         raise ManifestError(f"assets does not exist or is not a directory: {assets}")
 
@@ -88,6 +91,7 @@ def load_manifest(project_dir: Path) -> Manifest:
         requires=requires,
         banner_url=banner_url,
         scop=scop,
+        sign=sign,
     )
 
 
@@ -124,6 +128,15 @@ def _optional_str_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
     if any(not item for item in items):
         raise ManifestError(f"{key!r} must not contain empty values")
     return tuple(items)
+
+
+def _optional_bool(data: dict[str, object], key: str, *, default: bool) -> bool:
+    value = data.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise ManifestError(f"{key!r} must be true or false when provided")
+    return value
 
 
 def _optional_project_path(project_dir: Path, value: object, field: str) -> Path | None:

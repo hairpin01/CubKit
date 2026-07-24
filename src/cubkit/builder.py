@@ -42,7 +42,7 @@ def build_project(project_dir: Path, output: Path | None = None, progress: Build
     for item in files:
         report(item.source)
     payload = build_zip_payload(files)
-    rendered = render_module(manifest, payload)
+    rendered = render_module(manifest, payload, bundle_files=files)
 
     output_path = output.resolve() if output is not None else project_dir / "dist" / f"{default_artifact_stem(manifest)}.py"
     output_path.parent.mkdir(parents=True, exist_ok=True)

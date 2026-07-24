@@ -8,7 +8,10 @@ import hashlib
 import re
 import textwrap
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Sequence
 
+from .collector import BundleFile
 from .manifest import Manifest
 
 
@@ -21,14 +24,16 @@ class EntrypointMetadata:
     version: str | None = None
 
 
-def render_module(manifest: Manifest, payload: bytes) -> str:
+def render_module(manifest: Manifest, payload: bytes, *, bundle_files: Sequence[BundleFile] = ()) -> str:
     """Render a generated module from *manifest* and embedded *payload*."""
 
-    entrypoint_source = manifest.entrypoint.read_text(encoding="utf-8")
-    future_imports, entrypoint_source = _split_future_imports(entrypoint_source)
+    raw_entrypoint_source = manifest.entrypoint.read_text(encoding="utf-8")
+    future_imports, entrypoint_source = _split_future_imports(raw_entrypoint_source)
     entrypoint_metadata = read_entrypoint_metadata(entrypoint_source)
     payload_hash = hashlib.sha256(payload).hexdigest()
     encoded_payload = base64.b85encode(payload).decode("ascii") if payload else ""
+    source_hash = _source_sha256(manifest.entrypoint, raw_entrypoint_source, bundle_files, payload_hash)
+    signature = _build_signature(manifest.module_id, source_hash, payload_hash) if manifest.sign else None
     metadata = _render_metadata_header(
         manifest,
         name=entrypoint_metadata.name or manifest.name,
@@ -38,10 +43,29 @@ def render_module(manifest: Manifest, payload: bytes) -> str:
         manifest.module_id,
         payload_hash,
         encoded_payload,
-        package_dir=manifest.package.name if manifest.package is not None else "",
+        package_dirs=tuple(package.name for package in manifest.package),
     )
     future_block = f"\n{future_imports}\n" if future_imports else "\n"
-    return f"{metadata}{future_block}{bootstrap}\n\n# ---- CubKit entrypoint: {manifest.entrypoint.name} ----\n{entrypoint_source}\n"
+    build_info = _render_build_info(
+        manifest=manifest,
+        bundle_files=bundle_files,
+        payload_hash=payload_hash,
+        source_hash=source_hash,
+        signature=signature,
+        entrypoint_line=0,
+    )
+    prefix = f"{metadata}\n{build_info}{future_block}{bootstrap}\n\n# ---- CubKit entrypoint: {manifest.entrypoint.name} ----\n"
+    entrypoint_line = prefix.count("\n") + 1
+    build_info = _render_build_info(
+        manifest=manifest,
+        bundle_files=bundle_files,
+        payload_hash=payload_hash,
+        source_hash=source_hash,
+        signature=signature,
+        entrypoint_line=entrypoint_line,
+    )
+    prefix = f"{metadata}\n{build_info}{future_block}{bootstrap}\n\n# ---- CubKit entrypoint: {manifest.entrypoint.name} ----\n"
+    return f"{prefix}{entrypoint_source}\n"
 
 
 def default_artifact_stem(manifest: Manifest) -> str:
@@ -67,6 +91,74 @@ def _render_metadata_header(manifest: Manifest, *, name: str, version: str | Non
     if manifest.scop:
         lines.append(f"# scop: {manifest.scop}")
     return "\n".join(lines)
+
+
+def _render_build_info(
+    *,
+    manifest: Manifest,
+    bundle_files: Sequence[BundleFile],
+    payload_hash: str,
+    source_hash: str,
+    signature: str | None,
+    entrypoint_line: int,
+) -> str:
+    lines = [
+        "# CubKit build info:",
+        f"# CubKit source sha256: {source_hash}",
+        f"# CubKit payload sha256: {payload_hash}",
+    ]
+    if signature:
+        lines.append(f"# CubKit signature: {signature}")
+        lines.append("# CubKit signature algorithm: sha256(cubkit-sign-v1 + module id + source sha256 + payload sha256)")
+    lines.extend(
+        [
+            "# CubKit source map:",
+            f"# - generated line {entrypoint_line} -> {manifest.entrypoint.name}:1",
+        ]
+    )
+    if bundle_files:
+        lines.append("# - bundled files are extracted from the CubKit payload at import time:")
+    for item in sorted(bundle_files, key=lambda file: file.archive_name):
+        lines.append(
+            f"#   - {item.archive_name} -> {item.source.name}:1 "
+            f"(lines: {_line_count(item.source)}, sha256: {_file_sha256(item.source)})"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _source_sha256(entrypoint: Path, entrypoint_source: str, bundle_files: Sequence[BundleFile], payload_hash: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"cubkit-source-v1\0")
+    digest.update(entrypoint.name.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(entrypoint_source.encode("utf-8"))
+    digest.update(b"\0payload\0")
+    digest.update(payload_hash.encode("ascii"))
+    for item in sorted(bundle_files, key=lambda file: file.archive_name):
+        digest.update(b"\0file\0")
+        digest.update(item.archive_name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.source.read_bytes())
+    return digest.hexdigest()
+
+
+def _build_signature(module_id: str, source_hash: str, payload_hash: str) -> str:
+    digest = hashlib.sha256()
+    digest.update(b"cubkit-sign-v1\0")
+    digest.update(module_id.encode("utf-8"))
+    digest.update(b"\0")
+    digest.update(source_hash.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(payload_hash.encode("ascii"))
+    return digest.hexdigest()
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _line_count(path: Path) -> int:
+    return len(path.read_text(encoding="utf-8").splitlines())
 
 
 def read_entrypoint_metadata(source: str) -> EntrypointMetadata:
@@ -151,7 +243,7 @@ def _split_future_imports(source: str) -> tuple[str, str]:
     return "\n".join(future_lines), "\n".join(remaining).lstrip("\n")
 
 
-def _render_bootstrap(module_id: str, payload_hash: str, encoded_payload: str, *, package_dir: str) -> str:
+def _render_bootstrap(module_id: str, payload_hash: str, encoded_payload: str, *, package_dirs: tuple[str, ...]) -> str:
     header = f"""# Generated by CubKit. Do not edit this header by hand.
 # CubKit repository: https://github.com/hairpin01/CubKit
 # CubKit build notes:
@@ -165,13 +257,13 @@ def _render_bootstrap(module_id: str, payload_hash: str, encoded_payload: str, *
             header
             +
             f"__cubkit_module_id__ = {module_id!r}\n"
-            f"__cubkit_package_dir__ = {package_dir!r}\n"
+            f"__cubkit_package_dirs__ = {package_dirs!r}\n"
             '__cubkit_bundle_sha256__ = ""'
         )
 
     wrapped_payload = "\n".join(textwrap.wrap(encoded_payload, width=100))
     return f'''{header}__cubkit_module_id__ = {module_id!r}
-__cubkit_package_dir__ = {package_dir!r}
+__cubkit_package_dirs__ = {package_dirs!r}
 __cubkit_bundle_sha256__ = {payload_hash!r}
 __cubkit_bundle_b85__ = """
 {wrapped_payload}
@@ -213,8 +305,8 @@ def __cubkit_bootstrap__():
 
     # CubKit import-debug: build private package search paths for `from .utils import ...`.
     relative_import_paths = [bundle_path]
-    if __cubkit_package_dir__:
-        package_path = bundle_dir / __cubkit_package_dir__
+    for package_dir in reversed(__cubkit_package_dirs__):
+        package_path = bundle_dir / package_dir
         if package_path.is_dir():
             relative_import_paths.insert(0, str(package_path))
 

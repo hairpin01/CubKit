@@ -49,10 +49,14 @@ version = "0.1.0"
 author = "unknown"
 description = "Built with CubKit"
 entrypoint = "main.py"
+# One package dir or several package dirs are supported.
 package = "my_module_lib"
+# package = ["my_module_lib", "shared_helpers"]
 assets = "assets"
 # Optional root-private files for `from .utils import ...` in the entrypoint.
 sources = ["utils.py"]
+# Optional deterministic build signature comments.
+sign = true
 ```
 
 CubKit writes MCUB metadata comments into the generated main artifact before the
@@ -72,8 +76,22 @@ Entrypoints may use private relative imports for bundled helpers:
 from .utils import helper
 ```
 
-Add those helper files to `sources`. CubKit loads them through a private package
+CubKit auto-detects simple relative imports from sibling files. You can also add
+helper files manually to `sources`. Package directories may be declared as a
+single string or a list. CubKit loads bundled helpers through a private package
 name, so they do not collide with MCUB's global `utils`, `lib`, or other modules.
+
+When `sign = true`, CubKit adds deterministic build integrity comments:
+
+```python
+# CubKit source sha256: ...
+# CubKit payload sha256: ...
+# CubKit signature: ...
+```
+
+Generated artifacts also include a lightweight source map/debug block, showing
+where the entrypoint starts in the generated file and which bundled files were
+embedded into the payload.
 
 ## Commands
 

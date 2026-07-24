@@ -29,8 +29,8 @@ def collect_bundle_files(manifest: Manifest) -> list[BundleFile]:
     files.extend(_discover_relative_import_sources(manifest.entrypoint))
     for source in manifest.sources:
         files.extend(_collect_source(source))
-    if manifest.package is not None:
-        files.extend(_collect_tree(manifest.package, manifest.package.parent))
+    for package in manifest.package:
+        files.extend(_collect_tree(package, package.parent))
     if manifest.assets is not None:
         files.extend(_collect_tree(manifest.assets, manifest.assets.parent))
     return sorted(_dedupe(files), key=lambda item: item.archive_name)
