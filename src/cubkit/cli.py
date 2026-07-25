@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import shutil
+import threading
 from pathlib import Path
 import sys
 import textwrap
@@ -87,8 +89,17 @@ def _cmd_check(args: argparse.Namespace) -> int:
 def _cmd_build(args: argparse.Namespace) -> int:
     project_dir = args.path.resolve()
     reporter = _ProgressReporter(project_dir)
-    output = build_project(project_dir, args.output, progress=reporter.ok)
-    reporter.finish()
+    try:
+        output = build_project(
+            project_dir,
+            args.output,
+            progress=reporter.ok,
+            status=reporter.status,
+            dependency_progress=reporter.dependency,
+        )
+    finally:
+        reporter.finish()
+    print(f"📐 Done! in {_format_elapsed(time.monotonic() - reporter.started)}.")
     print(f"built: {output}")
     return 0
 
@@ -98,25 +109,69 @@ class _ProgressReporter:
 
     _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
     _BAR_WIDTH = 60
+    _MIN_BAR_WIDTH = 8
+    _REFRESH_INTERVAL = 0.1
 
     def __init__(self, project_dir: Path) -> None:
         self.project_dir = project_dir
         self.started = time.monotonic()
-        self._progress_visible = False
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._active = False
+        self._line_visible = False
+        self._label = "building"
+        self._index = 0
+        self._total = 0
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
 
     def ok(self, path: Path, index: int, total: int) -> None:
-        if self._progress_visible:
-            sys.stdout.write("\r\033[2K")
-        sys.stdout.write(f"OK {self._display_path(path)}\n")
-        sys.stdout.write(self._progress_line(index, total))
-        sys.stdout.flush()
-        self._progress_visible = True
+        with self._lock:
+            self._clear_line_locked()
+            sys.stdout.write(f"OK {self._display_path(path)}\n")
+            self._set_progress_locked("building", index, total)
+            self._render_locked()
+
+    def status(self, message: str) -> None:
+        with self._lock:
+            self._set_progress_locked(message, 0, 0)
+            self._render_locked()
+
+    def dependency(self, name: str, index: int, total: int) -> None:
+        with self._lock:
+            self._set_progress_locked(f"collecting dependencies... {name}", index, total)
+            self._render_locked()
 
     def finish(self) -> None:
-        if self._progress_visible:
-            sys.stdout.write("\n")
+        self._stop.set()
+        self._thread.join(timeout=1)
+        with self._lock:
+            self._clear_line_locked()
+            self._active = False
             sys.stdout.flush()
-            self._progress_visible = False
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._REFRESH_INTERVAL):
+            with self._lock:
+                if self._active:
+                    self._render_locked()
+
+    def _set_progress_locked(self, label: str, index: int, total: int) -> None:
+        self._label = label
+        self._index = index
+        self._total = total
+        self._active = True
+
+    def _render_locked(self) -> None:
+        self._clear_line_locked()
+        sys.stdout.write(self._progress_line(self._label, self._index, self._total))
+        sys.stdout.flush()
+        self._line_visible = True
+
+    def _clear_line_locked(self) -> None:
+        if self._line_visible:
+            sys.stdout.write("\r\033[2K")
+            self._line_visible = False
 
     def _display_path(self, path: Path) -> str:
         try:
@@ -124,23 +179,70 @@ class _ProgressReporter:
         except ValueError:
             return path.as_posix()
 
-    def _progress_line(self, index: int, total: int) -> str:
-        total = max(total, 1)
+    def _progress_line(self, label: str, index: int, total: int) -> str:
         elapsed = time.monotonic() - self.started
-        spinner = self._SPINNER[index % len(self._SPINNER)]
-        filled = max(1, int(self._BAR_WIDTH * index / total))
-        filled = min(filled, self._BAR_WIDTH)
-        if filled >= self._BAR_WIDTH:
-            bar = "#" * self._BAR_WIDTH
+        spinner = self._SPINNER[int(elapsed * 10) % len(self._SPINNER)]
+        elapsed_text = _format_elapsed(elapsed)
+        suffix = "" if total <= 0 else f" {index}/{max(total, 1)}"
+        label = _collapse_spaces(label)
+        width = max(20, shutil.get_terminal_size((80, 20)).columns)
+        line = self._format_progress_line(label, spinner, elapsed_text, suffix, index, total, width)
+        return line
+
+    def _format_progress_line(
+        self,
+        label: str,
+        spinner: str,
+        elapsed_text: str,
+        suffix: str,
+        index: int,
+        total: int,
+        width: int,
+    ) -> str:
+        label = _fit_label(label, max(6, min(len(label), width // 2)))
+        prefix = f"{label} {spinner} {elapsed_text} "
+        available = width - len(prefix) - len(suffix) - 3
+        if available < self._MIN_BAR_WIDTH:
+            label = _fit_label(label, max(0, len(label) + available - self._MIN_BAR_WIDTH))
+            prefix = f"{label} {spinner} {elapsed_text} " if label else f"{spinner} {elapsed_text} "
+            available = width - len(prefix) - len(suffix) - 3
+        bar_width = max(1, min(self._BAR_WIDTH, available))
+        bar = self._bar(index, total, bar_width)
+        return f"{prefix}[{bar}]{suffix}"
+
+    @staticmethod
+    def _bar(index: int, total: int, width: int) -> str:
+        if total <= 0:
+            return ">" + "-" * (width - 1)
+        total = max(total, 1)
+        filled = max(0, int(width * index / total))
+        filled = min(filled, width)
+        if filled >= width:
+            return "#" * width
+        elif filled <= 0:
+            return ">" + "-" * (width - 1)
         else:
-            bar = "#" * filled + ">" + "-" * (self._BAR_WIDTH - filled - 1)
-        return f"{spinner} {_format_elapsed(elapsed)} [{bar}] {index}/{total}"
+            return "#" * filled + ">" + "-" * (width - filled - 1)
 
 
 def _format_elapsed(seconds: float) -> str:
     if seconds < 10:
         return f"{seconds:.1f}s"
     return f"{seconds:.0f}s"
+
+
+def _collapse_spaces(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _fit_label(value: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    if len(value) <= max_width:
+        return value
+    if max_width == 1:
+        return "…"
+    return value[: max_width - 1] + "…"
 
 
 def _write_new(path: Path, content: str) -> None:

@@ -182,6 +182,123 @@ from .format import pretty_text
 CubKit adds all package directories to the generated module's private import
 search path.
 
+## Vendored libraries
+
+Use `libs` when a module needs a local library that you do not want to publish to
+PyPI or GitHub. CubKit embeds the library into the generated artifact and exposes
+it under `cubkit.lib`.
+
+Example layout:
+
+```text
+my_module/
+  cubkit.toml
+  main.py
+  vendor/
+    genipng/
+      pyproject.toml
+      src/
+        genipng/
+          __init__.py
+```
+
+`cubkit.toml`:
+
+```toml
+id = "my_module"
+entrypoint = "main.py"
+
+[libs.genipng]
+type = "local"
+path = "vendor/genipng"
+```
+
+`path` can point to a directory inside the project, outside it with `../`, or to
+an absolute local path:
+
+```toml
+[libs.tabfix]
+type = "local"
+path = "/home/alina/test/tabfix"
+```
+
+`main.py`:
+
+```python
+from cubkit.lib import genipng
+
+
+def make_image() -> bytes:
+    return genipng.render_png()
+```
+
+Supported local library shapes:
+
+```text
+vendor/genipng/genipng/__init__.py
+vendor/genipng/src/genipng/__init__.py
+vendor/genipng/genipng.py
+vendor/genipng/__init__.py
+vendor/genipng-0.1-py3-none-any.whl
+vendor/genipng.cpython-314-aarch64-linux-android.so
+```
+
+Wheels are unpacked into the vendored library namespace. Native extension files
+are embedded too, but they must already match the target platform and Python ABI
+where MCUB runs. When `libs` are present, `cubkit build` prints:
+
+```text
+collecting dependencies...
+```
+
+If a local directory has `pyproject.toml`, `setup.py`, or `setup.cfg`, CubKit
+installs it with pip instead of copying only its files. That means dependencies
+declared by the local package are installed into the same vendored payload too.
+
+Pip/GitHub/URL descriptors are resolved with `pip install --target` during build:
+
+```toml
+[libs.some_lib]
+url = "https://example.com/some_lib.whl"
+
+[libs.other_lib]
+package_pip = "other-lib>=1.0"
+
+[libs.github_lib]
+package_github = "https://github.com/example/some-lib"
+```
+
+For GitHub URLs, CubKit passes `git+https://github.com/...` to pip unless you
+already provided a `git+` URL. Network-based descriptors require network access
+at build time.
+
+### Do not vendor MCUB's own dependencies by default
+
+If you want a module without extra external dependencies, do **not** put MCUB's
+runtime dependencies into `[libs]`. MCUB already ships/uses them, so bundling
+another copy usually only makes the artifact larger and can create version
+conflicts.
+
+Usually do **not** vendor these packages:
+
+```text
+telethon-MCUB==1.44.1
+psutil
+aiohttp
+pysocks
+python-socks[asyncio]
+aiosqlite
+cryptg
+socks
+jinja2
+aiohttp-jinja2
+PyYAML
+```
+
+Import and use them normally from the MCUB environment. Vendor them only for a
+special reason, for example when you need a private patched build or a strict
+version isolated from the framework.
+
 ## Full module example
 
 This example shows a class-style MCUB module with:

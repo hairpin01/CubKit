@@ -21,5 +21,5 @@ def build_zip_payload(files: list[BundleFile]) -> bytes:
             info = zipfile.ZipInfo(item.archive_name, ZIP_TIMESTAMP)
             info.compress_type = zipfile.ZIP_DEFLATED
             info.external_attr = 0o644 << 16
-            archive.writestr(info, item.source.read_bytes())
+            archive.writestr(info, item.read_bytes())
     return buffer.getvalue()

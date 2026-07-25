@@ -14,6 +14,18 @@ MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 
 
 @dataclass(frozen=True)
+class LibrarySpec:
+    """A vendored library requested by the manifest."""
+
+    name: str
+    type: str
+    path: Path | None = None
+    url: str | None = None
+    package_pip: str | None = None
+    package_github: str | None = None
+
+
+@dataclass(frozen=True)
 class Manifest:
     """CubKit module manifest."""
 
@@ -27,6 +39,7 @@ class Manifest:
     package: tuple[Path, ...] = ()
     assets: Path | None = None
     sources: tuple[Path, ...] = ()
+    libs: tuple[LibrarySpec, ...] = ()
     requires: tuple[str, ...] = ()
     banner_url: str | None = None
     scop: str | None = None
@@ -66,6 +79,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     package = _optional_project_paths(source_root, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
     sources = _optional_project_paths(source_root, data.get("sources"), "sources")
+    libs = _optional_libraries(project_dir, data.get("libs"))
     requires = _optional_str_tuple(data, "requires")
     banner_url = _optional_str(data, "banner_url", default=None)
     scop = _optional_str(data, "scop", default=None)
@@ -97,6 +111,7 @@ def load_manifest(project_dir: Path) -> Manifest:
         package=package,
         assets=assets,
         sources=sources,
+        libs=libs,
         requires=requires,
         banner_url=banner_url,
         scop=scop,
@@ -148,6 +163,75 @@ def _optional_bool(data: dict[str, object], key: str, *, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ManifestError(f"{key!r} must be true or false when provided")
     return value
+
+
+def _optional_libraries(project_dir: Path, value: object) -> tuple[LibrarySpec, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ManifestError("'libs' must be a table of library definitions")
+
+    libraries: list[LibrarySpec] = []
+    for raw_name, raw_spec in value.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ManifestError("library names in 'libs' must be non-empty strings")
+        name = raw_name.strip()
+        if not name.isidentifier():
+            raise ManifestError(f"library name must be a valid Python identifier: {name!r}")
+        if not isinstance(raw_spec, dict):
+            raise ManifestError(f"libs.{name!s} must be a table")
+
+        lib_type = _library_type(raw_spec)
+        path_value = _library_str(raw_spec, "path")
+        path = _library_path(project_dir, path_value) if path_value else None
+        if lib_type == "local":
+            if path is None:
+                raise ManifestError(f"libs.{name}.path is required for local libraries")
+            if not path.exists():
+                raise ManifestError(f"library path does not exist: {path}")
+
+        libraries.append(
+            LibrarySpec(
+                name=name,
+                type=lib_type,
+                path=path,
+                url=_library_str(raw_spec, "url"),
+                package_pip=_library_str(raw_spec, "package_pip"),
+                package_github=_library_str(raw_spec, "package_github"),
+            )
+        )
+    return tuple(libraries)
+
+
+def _library_str(data: dict[str, object], key: str) -> str | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ManifestError(f"library field {key!r} must be a non-empty string when provided")
+    return value.strip()
+
+
+def _library_type(data: dict[str, object]) -> str:
+    explicit = _library_str(data, "type")
+    if explicit:
+        return explicit
+    if _library_str(data, "path"):
+        return "local"
+    if _library_str(data, "url"):
+        return "url"
+    if _library_str(data, "package_pip"):
+        return "package_pip"
+    if _library_str(data, "package_github"):
+        return "package_github"
+    return "local"
+
+
+def _library_path(project_dir: Path, value: str) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    return (project_dir / path).resolve()
 
 
 def _optional_project_path(project_dir: Path, value: object, field: str) -> Path | None:

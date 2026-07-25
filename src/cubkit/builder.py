@@ -11,6 +11,8 @@ from .manifest import load_manifest
 from .renderer import default_artifact_stem, render_module
 
 BuildProgress = Callable[[Path, int, int], None]
+BuildStatus = Callable[[str], None]
+DependencyProgress = Callable[[str, int, int], None]
 
 
 def check_project(project_dir: Path) -> int:
@@ -23,13 +25,19 @@ def check_project(project_dir: Path) -> int:
 
 
 def build_project(
-    project_dir: Path, output: Path | None = None, progress: BuildProgress | None = None
+    project_dir: Path,
+    output: Path | None = None,
+    progress: BuildProgress | None = None,
+    status: BuildStatus | None = None,
+    dependency_progress: DependencyProgress | None = None,
 ) -> Path:
     """Build *project_dir* and return the generated artifact path."""
 
     project_dir = project_dir.resolve()
     manifest = load_manifest(project_dir)
-    files = collect_bundle_files(manifest)
+    if manifest.libs and status is not None:
+        status("collecting dependencies...")
+    files = collect_bundle_files(manifest, dependency_progress=dependency_progress)
     total = 1 + len(files)
     done = 0
 

@@ -65,6 +65,10 @@ assets = "assets"
 sources = ["utils.py"]
 # Optional deterministic build signature comments.
 sign = true
+
+[libs.genipng]
+type = "local"
+path = "vendor/genipng"
 ```
 
 When `src = "src"` is set, code paths like `entrypoint`, `package` and `sources`
@@ -91,6 +95,22 @@ CubKit auto-detects simple relative imports from sibling files. You can also add
 helper files manually to `sources`. Package directories may be declared as a
 single string or a list. CubKit loads bundled helpers through a private package
 name, so they do not collide with MCUB's global `utils`, `lib`, or other modules.
+
+Local libraries declared in `[libs]` are vendored into the artifact and can be
+imported with:
+
+```python
+from cubkit.lib import genipng
+```
+
+`package_pip`, `package_github`, and direct `url` descriptors are resolved with
+`pip install --target` during build. Local `path` may point inside the project,
+outside it with `../`, or to an absolute path. It can target a source package
+directory, a `.py` module, a `.whl`, or a native extension file such as
+`.so`/`.pyd`. If a local directory contains `pyproject.toml`, `setup.py`, or
+`setup.cfg`, CubKit installs it with pip too, so its package dependencies are
+vendored into the artifact. When libs are present, `cubkit build` prints
+`collecting dependencies...` before bundling them.
 
 When `sign = true`, CubKit adds deterministic build integrity comments:
 

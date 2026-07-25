@@ -134,8 +134,8 @@ def _render_build_info(
         )
     for item in sorted(bundle_files, key=lambda file: file.archive_name):
         lines.append(
-            f"#   - {item.archive_name} -> {item.source.name}:1 "
-            f"(lines: {_line_count(item.source)}, sha256: {_file_sha256(item.source)})"
+            f"#   - {item.archive_name} -> {_source_label(item)}:1 "
+            f"(lines: {_line_count(item)}, sha256: {_file_sha256(item)})"
         )
     return "\n".join(lines) + "\n"
 
@@ -157,7 +157,7 @@ def _source_sha256(
         digest.update(b"\0file\0")
         digest.update(item.archive_name.encode("utf-8"))
         digest.update(b"\0")
-        digest.update(item.source.read_bytes())
+        digest.update(item.read_bytes())
     return digest.hexdigest()
 
 
@@ -172,12 +172,22 @@ def _build_signature(module_id: str, source_hash: str, payload_hash: str) -> str
     return digest.hexdigest()
 
 
-def _file_sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _source_label(item: BundleFile) -> str:
+    if item.display_name:
+        return item.display_name
+    return item.source.name
 
 
-def _line_count(path: Path) -> int:
-    return len(path.read_text(encoding="utf-8").splitlines())
+def _file_sha256(item: BundleFile) -> str:
+    return hashlib.sha256(item.read_bytes()).hexdigest()
+
+
+def _line_count(item: BundleFile) -> str:
+    data = item.read_bytes()
+    try:
+        return str(len(data.decode("utf-8").splitlines()))
+    except UnicodeDecodeError:
+        return "binary"
 
 
 def read_entrypoint_metadata(source: str) -> EntrypointMetadata:
@@ -302,17 +312,20 @@ def _render_bootstrap(
 # - Bundled helper files are stored below as a base85-encoded zip payload.
 # - On import, CubKit verifies the payload SHA256 and extracts it into CUBKIT_CACHE_DIR or ~/.cache/cubkit.
 # - CubKit import-debug comments below explain sys.path/package wiring for private relative imports.
+# - Vendored libraries declared in [libs] are exposed as `cubkit.lib.<name>`.
 """
     if not encoded_payload:
         return (
             header + f"__cubkit_module_id__ = {module_id!r}\n"
             f"__cubkit_package_dirs__ = {package_dirs!r}\n"
+            "__cubkit_lib_dir__ = '_cubkit_lib'\n"
             '__cubkit_bundle_sha256__ = ""'
         )
 
     wrapped_payload = "\n".join(textwrap.wrap(encoded_payload, width=100))
     return f'''{header}__cubkit_module_id__ = {module_id!r}
 __cubkit_package_dirs__ = {package_dirs!r}
+__cubkit_lib_dir__ = '_cubkit_lib'
 __cubkit_bundle_sha256__ = {payload_hash!r}
 __cubkit_bundle_b85__ = """
 {wrapped_payload}
@@ -325,6 +338,7 @@ def __cubkit_bootstrap__():
     import hashlib
     import os
     import sys
+    import types
     import zipfile
     from pathlib import Path
 
@@ -367,6 +381,28 @@ def __cubkit_bootstrap__():
     module_spec = module_globals.get("__spec__")
     if module_spec is not None:
         module_spec.submodule_search_locations = relative_import_paths
+
+    # CubKit import-debug: expose vendored libraries through `from cubkit.lib import name`.
+    lib_path = bundle_dir / __cubkit_lib_dir__
+    if lib_path.is_dir():
+        lib_path_str = str(lib_path)
+        if lib_path_str not in sys.path:
+            sys.path.insert(0, lib_path_str)
+
+        cubkit_pkg = sys.modules.get("cubkit")
+        if cubkit_pkg is None:
+            cubkit_pkg = types.ModuleType("cubkit")
+            sys.modules["cubkit"] = cubkit_pkg
+        if not hasattr(cubkit_pkg, "__path__"):
+            cubkit_pkg.__path__ = []
+
+        lib_pkg = sys.modules.get("cubkit.lib")
+        if lib_pkg is None:
+            lib_pkg = types.ModuleType("cubkit.lib")
+            sys.modules["cubkit.lib"] = lib_pkg
+        lib_pkg.__path__ = [lib_path_str]
+        lib_pkg.__package__ = "cubkit"
+        setattr(cubkit_pkg, "lib", lib_pkg)
 
 __cubkit_bootstrap__()
 del __cubkit_bootstrap__'''

@@ -5,15 +5,35 @@ import importlib.util
 import sys
 import tempfile
 import unittest
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from cubkit.builder import build_project, check_project
 from cubkit.cli import main
+from cubkit.lib_bundler import _github_requirement
 
 
 class CubKitTest(unittest.TestCase):
+    def test_package_github_requirement_forms(self) -> None:
+        self.assertEqual(
+            _github_requirement("git@github.com:hairpin01/tabfix.git"),
+            "git+ssh://git@github.com/hairpin01/tabfix.git",
+        )
+        self.assertEqual(
+            _github_requirement("ssh://git@github.com/hairpin01/tabfix.git"),
+            "git+ssh://git@github.com/hairpin01/tabfix.git",
+        )
+        self.assertEqual(
+            _github_requirement("https://github.com/hairpin01/tabfix"),
+            "git+https://github.com/hairpin01/tabfix",
+        )
+        self.assertEqual(
+            _github_requirement("hairpin01/tabfix"),
+            "git+https://github.com/hairpin01/tabfix",
+        )
+
     def test_init_check_build(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "demo_mod"
@@ -42,6 +62,7 @@ class CubKitTest(unittest.TestCase):
             self.assertIn("OK progress_mod_lib/__init__.py", output)
             self.assertIn("OK progress_mod_lib/utils.py", output)
             self.assertIn("/3", output)
+            self.assertIn("📐 Done! in ", output)
             self.assertIn("built:", output)
 
     def test_build_adds_manifest_metadata_header(self) -> None:
@@ -383,6 +404,405 @@ class CubKitTest(unittest.TestCase):
                 self.assertEqual(module.VALUE, "cmd:callback")
             finally:
                 sys.modules.pop("SrcRootMod", None)
+
+    def test_local_libraries_are_importable_from_cubkit_lib(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "lib_mod"
+            library_root = project / "vendor" / "genipng" / "src" / "genipng"
+            library_root.mkdir(parents=True)
+            project.mkdir(exist_ok=True)
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.genipng]',
+                        'type = "local"',
+                        'path = "vendor/genipng"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (library_root / "__init__.py").write_text(
+                "def make_png():\n    return 'png-bytes'\n",
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import genipng\n\nVALUE = genipng.make_png()\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+
+            self.assertIn("_cubkit_lib/genipng/__init__.py", text)
+            self.assertIn("__cubkit_lib_dir__ = '_cubkit_lib'", text)
+
+            spec = importlib.util.spec_from_file_location("LibMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            previous_lib = sys.modules.get("cubkit.lib")
+            previous_genipng = sys.modules.get("cubkit.lib.genipng")
+            sys.modules["LibMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "png-bytes")
+            finally:
+                sys.modules.pop("LibMod", None)
+                if previous_genipng is None:
+                    sys.modules.pop("cubkit.lib.genipng", None)
+                else:
+                    sys.modules["cubkit.lib.genipng"] = previous_genipng
+                if previous_lib is None:
+                    sys.modules.pop("cubkit.lib", None)
+                    cubkit_pkg = sys.modules.get("cubkit")
+                    if cubkit_pkg is not None and hasattr(cubkit_pkg, "lib"):
+                        delattr(cubkit_pkg, "lib")
+                else:
+                    sys.modules["cubkit.lib"] = previous_lib
+
+    def test_local_library_path_can_point_outside_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "outside_lib_mod"
+            project.mkdir()
+            library_root = root / "tabfix" / "src" / "tabfix"
+            library_root.mkdir(parents=True)
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "outside_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.tabfix]',
+                        'type = "local"',
+                        'path = "../tabfix"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (library_root / "__init__.py").write_text(
+                "def fix(value):\n    return value.upper()\n",
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import tabfix\n\nVALUE = tabfix.fix('ok')\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+
+            self.assertIn("_cubkit_lib/tabfix/__init__.py", text)
+
+            spec = importlib.util.spec_from_file_location("OutsideLibMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            previous_lib = sys.modules.get("cubkit.lib")
+            previous_tabfix = sys.modules.get("cubkit.lib.tabfix")
+            sys.modules["OutsideLibMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "OK")
+            finally:
+                sys.modules.pop("OutsideLibMod", None)
+                if previous_tabfix is None:
+                    sys.modules.pop("cubkit.lib.tabfix", None)
+                else:
+                    sys.modules["cubkit.lib.tabfix"] = previous_tabfix
+                if previous_lib is None:
+                    sys.modules.pop("cubkit.lib", None)
+                    cubkit_pkg = sys.modules.get("cubkit")
+                    if cubkit_pkg is not None and hasattr(cubkit_pkg, "lib"):
+                        delattr(cubkit_pkg, "lib")
+                else:
+                    sys.modules["cubkit.lib"] = previous_lib
+
+    def test_wheel_library_is_importable_from_cubkit_lib(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "wheel_lib_mod"
+            project.mkdir()
+            wheel_path = project / "genipng-0.1-py3-none-any.whl"
+            with zipfile.ZipFile(wheel_path, "w") as wheel:
+                wheel.writestr("genipng/__init__.py", "def make_png():\n    return 'wheel-png'\n")
+
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "wheel_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.genipng]',
+                        'type = "local"',
+                        'path = "genipng-0.1-py3-none-any.whl"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import genipng\n\nVALUE = genipng.make_png()\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+
+            self.assertIn("_cubkit_lib/genipng/__init__.py", text)
+            self.assertIn("genipng-0.1-py3-none-any.whl:genipng/__init__.py", text)
+
+            spec = importlib.util.spec_from_file_location("WheelLibMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            previous_lib = sys.modules.get("cubkit.lib")
+            previous_genipng = sys.modules.get("cubkit.lib.genipng")
+            sys.modules["WheelLibMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "wheel-png")
+            finally:
+                sys.modules.pop("WheelLibMod", None)
+                if previous_genipng is None:
+                    sys.modules.pop("cubkit.lib.genipng", None)
+                else:
+                    sys.modules["cubkit.lib.genipng"] = previous_genipng
+                if previous_lib is None:
+                    sys.modules.pop("cubkit.lib", None)
+                    cubkit_pkg = sys.modules.get("cubkit")
+                    if cubkit_pkg is not None and hasattr(cubkit_pkg, "lib"):
+                        delattr(cubkit_pkg, "lib")
+                else:
+                    sys.modules["cubkit.lib"] = previous_lib
+
+    def test_native_binary_library_file_is_bundled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "native_lib_mod"
+            native_dir = project / "native"
+            native_dir.mkdir(parents=True)
+            (native_dir / "fastpng.so").write_bytes(b"\x7fELF\x00\xffbinary-test")
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "native_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.fastpng]',
+                        'type = "local"',
+                        'path = "native/fastpng.so"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            text = build_project(project).read_text(encoding="utf-8")
+
+            self.assertIn("_cubkit_lib/fastpng.so", text)
+            self.assertIn("lines: binary", text)
+
+    def test_cli_build_prints_collecting_dependencies_for_libs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "status_lib_mod"
+            lib_root = project / "vendor" / "statuslib"
+            lib_root.mkdir(parents=True)
+            (lib_root / "__init__.py").write_text("VALUE = 'ok'\n", encoding="utf-8")
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "status_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.statuslib]',
+                        'type = "local"',
+                        'path = "vendor/statuslib"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main(["build", str(project)]), 0)
+
+            output = stdout.getvalue()
+            self.assertIn("collecting dependencies... statuslib", output)
+            self.assertIn("/1", output)
+            self.assertIn("📐 Done! in ", output)
+
+    def test_package_pip_library_is_installed_and_vendored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "piplib_pkg"
+            source = package / "piplib"
+            source.mkdir(parents=True)
+            (package / "setup.py").write_text(
+                "from setuptools import setup\n"
+                "setup(name='piplib', version='0.1', packages=['piplib'])\n",
+                encoding="utf-8",
+            )
+            (source / "__init__.py").write_text("def value():\n    return 'pip-local'\n", encoding="utf-8")
+
+            project = root / "pip_lib_mod"
+            project.mkdir()
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "pip_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.piplib]',
+                        'package_pip = "' + package.as_posix() + '"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import piplib\n\nVALUE = piplib.value()\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("_cubkit_lib/piplib/__init__.py", text)
+
+            spec = importlib.util.spec_from_file_location("PipLibMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            previous_lib = sys.modules.get("cubkit.lib")
+            previous_piplib = sys.modules.get("cubkit.lib.piplib")
+            sys.modules["PipLibMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "pip-local")
+            finally:
+                sys.modules.pop("PipLibMod", None)
+                if previous_piplib is None:
+                    sys.modules.pop("cubkit.lib.piplib", None)
+                else:
+                    sys.modules["cubkit.lib.piplib"] = previous_piplib
+                if previous_lib is None:
+                    sys.modules.pop("cubkit.lib", None)
+                    cubkit_pkg = sys.modules.get("cubkit")
+                    if cubkit_pkg is not None and hasattr(cubkit_pkg, "lib"):
+                        delattr(cubkit_pkg, "lib")
+                else:
+                    sys.modules["cubkit.lib"] = previous_lib
+
+    def test_local_installable_library_vendors_its_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dependency = root / "deplib_pkg"
+            dependency_source = dependency / "deplib"
+            dependency_source.mkdir(parents=True)
+            (dependency / "setup.py").write_text(
+                "from setuptools import setup\n"
+                "setup(name='deplib', version='0.1', packages=['deplib'])\n",
+                encoding="utf-8",
+            )
+            (dependency_source / "__init__.py").write_text(
+                "def suffix():\n    return 'dep'\n",
+                encoding="utf-8",
+            )
+
+            library = root / "piplib_pkg"
+            library_source = library / "piplib"
+            library_source.mkdir(parents=True)
+            (library / "setup.py").write_text(
+                "from setuptools import setup\n"
+                "setup(\n"
+                "    name='piplib',\n"
+                "    version='0.1',\n"
+                "    packages=['piplib'],\n"
+                f"    install_requires=['deplib @ file://{dependency.as_posix()}'],\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            (library_source / "__init__.py").write_text(
+                "import deplib\n\n"
+                "def value():\n    return 'local-' + deplib.suffix()\n",
+                encoding="utf-8",
+            )
+
+            project = root / "local_deps_mod"
+            project.mkdir()
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "local_deps_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.piplib]',
+                        'type = "local"',
+                        'path = "../piplib_pkg"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import piplib\n\nVALUE = piplib.value()\n",
+                encoding="utf-8",
+            )
+
+            output = build_project(project)
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("_cubkit_lib/piplib/__init__.py", text)
+            self.assertIn("_cubkit_lib/deplib/__init__.py", text)
+
+            spec = importlib.util.spec_from_file_location("LocalDepsMod", output)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            module = importlib.util.module_from_spec(spec)
+            previous_modules = {
+                name: sys.modules.get(name)
+                for name in ("cubkit.lib", "cubkit.lib.piplib", "deplib")
+            }
+            sys.modules["LocalDepsMod"] = module
+            try:
+                spec.loader.exec_module(module)
+                self.assertEqual(module.VALUE, "local-dep")
+            finally:
+                sys.modules.pop("LocalDepsMod", None)
+                for name, previous in previous_modules.items():
+                    if previous is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = previous
+                cubkit_pkg = sys.modules.get("cubkit")
+                if previous_modules["cubkit.lib"] is None and cubkit_pkg is not None and hasattr(cubkit_pkg, "lib"):
+                    delattr(cubkit_pkg, "lib")
+
+    def test_package_github_accepts_pip_installable_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "gitlib_pkg"
+            source = package / "gitlib"
+            source.mkdir(parents=True)
+            (package / "setup.py").write_text(
+                "from setuptools import setup\n"
+                "setup(name='gitlib', version='0.1', packages=['gitlib'])\n",
+                encoding="utf-8",
+            )
+            (source / "__init__.py").write_text("VALUE = 'github-like-url'\n", encoding="utf-8")
+
+            project = root / "github_lib_mod"
+            project.mkdir()
+            (project / "cubkit.toml").write_text(
+                "\n".join(
+                    [
+                        'id = "github_lib_mod"',
+                        'entrypoint = "main.py"',
+                        '[libs.gitlib]',
+                        'package_github = "file://' + package.as_posix() + '"',
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (project / "main.py").write_text(
+                "from cubkit.lib import gitlib\n\nVALUE = gitlib.VALUE\n",
+                encoding="utf-8",
+            )
+
+            text = build_project(project).read_text(encoding="utf-8")
+
+            self.assertIn("_cubkit_lib/gitlib/__init__.py", text)
 
 
 if __name__ == "__main__":

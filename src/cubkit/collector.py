@@ -5,9 +5,13 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from .errors import BuildError
+from .lib_bundler import collect_library_files
 from .manifest import Manifest
+
+DependencyProgress = Callable[[str, int, int], None]
 
 EXCLUDED_DIRS = {
     ".git",
@@ -28,9 +32,21 @@ class BundleFile:
 
     source: Path
     archive_name: str
+    data: bytes | None = None
+    display_name: str | None = None
+
+    def read_bytes(self) -> bytes:
+        if self.data is not None:
+            return self.data
+        return self.source.read_bytes()
+
+    def display_path(self) -> str:
+        return self.display_name or self.source.as_posix()
 
 
-def collect_bundle_files(manifest: Manifest) -> list[BundleFile]:
+def collect_bundle_files(
+    manifest: Manifest, dependency_progress: DependencyProgress | None = None
+) -> list[BundleFile]:
     """Collect package and asset files for *manifest*."""
 
     files: list[BundleFile] = []
@@ -39,6 +55,15 @@ def collect_bundle_files(manifest: Manifest) -> list[BundleFile]:
         files.extend(_collect_source(source))
     for package in manifest.package:
         files.extend(_collect_tree(package, package.parent))
+    files.extend(
+        BundleFile(
+            source=item.source,
+            archive_name=item.archive_name,
+            data=item.data,
+            display_name=item.display_name,
+        )
+        for item in collect_library_files(manifest, progress=dependency_progress)
+    )
     if manifest.assets is not None:
         files.extend(_collect_tree(manifest.assets, manifest.assets.parent))
     return sorted(_dedupe(files), key=lambda item: item.archive_name)
@@ -138,8 +163,8 @@ def validate_bundle_files(files: list[BundleFile]) -> None:
         if item.archive_name in seen:
             raise BuildError(f"duplicate archive path: {item.archive_name}")
         seen.add(item.archive_name)
-        if item.source.suffix == ".py":
-            _compile_python(item.source)
+        if item.archive_name.endswith(".py"):
+            _compile_python(item)
 
 
 def _collect_tree(root: Path, base: Path) -> list[BundleFile]:
@@ -162,10 +187,10 @@ def _is_excluded(path: Path) -> bool:
     return any(path.name.endswith(suffix) for suffix in EXCLUDED_SUFFIXES)
 
 
-def _compile_python(path: Path) -> None:
+def _compile_python(item: BundleFile) -> None:
     try:
-        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+        compile(item.read_bytes().decode("utf-8"), item.display_path(), "exec")
     except SyntaxError as exc:
         raise BuildError(
-            f"syntax error in {path}: {exc.msg} at line {exc.lineno}"
+            f"syntax error in {item.display_path()}: {exc.msg} at line {exc.lineno}"
         ) from exc
