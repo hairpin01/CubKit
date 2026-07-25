@@ -159,7 +159,6 @@ def _collect_pip_requirement(library: LibrarySpec, requirement: str) -> list[Lib
             "install",
             "--no-input",
             "--disable-pip-version-check",
-            "--no-build-isolation",
             "--no-compile",
             "--target",
             str(target),
