@@ -219,7 +219,7 @@ an absolute local path:
 ```toml
 [libs.tabfix]
 type = "local"
-path = "/home/alina/test/tabfix"
+path = "/home/user/test/tabfix"
 ```
 
 `main.py`:
