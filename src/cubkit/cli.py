@@ -13,6 +13,7 @@ import time
 from . import __version__
 from .builder import build_project, check_project
 from .errors import CubKitError
+from .types_sync import sync_mcub_types
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,6 +56,12 @@ def _make_parser() -> argparse.ArgumentParser:
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
     build_parser.set_defaults(func=_cmd_build)
+
+    types_parser = subparsers.add_parser(
+        "types", help="download MCUB core/lib/types into a project"
+    )
+    types_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    types_parser.set_defaults(func=_cmd_types)
     return parser
 
 
@@ -101,6 +108,20 @@ def _cmd_build(args: argparse.Namespace) -> int:
         reporter.finish()
     print(f"📐 Done! in {_format_elapsed(time.monotonic() - reporter.started)}.")
     print(f"built: {output}")
+    return 0
+
+
+def _cmd_types(args: argparse.Namespace) -> int:
+    project_dir = args.path.resolve()
+    written = sync_mcub_types(project_dir)
+    for path in written:
+        try:
+            label = path.relative_to(project_dir).as_posix()
+        except ValueError:
+            label = path.as_posix()
+        print(f"OK {label}")
+    print(f"types: downloaded {len(written)} file(s) into {project_dir / 'core' / 'lib' / 'types'}")
+    print("gitignore: core/")
     return 0
 
 
@@ -267,6 +288,8 @@ def _manifest_template(module_id: str, name: str, package_name: str) -> str:
         author = "unknown"
         description = "Built with CubKit"
         entrypoint = "main.py"
+        # Optional output path for cubkit build when -o is not used.
+        # out = "dist/{module_id}.py"
         package = {package_name!r}
         assets = "assets"
         """).lstrip()

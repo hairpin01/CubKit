@@ -24,11 +24,15 @@ pip install -e .
 
 ```bash
 cubkit init my_module
+cubkit types my_module
 cubkit check my_module
 cubkit build my_module
 ```
 
 The build output is written to `my_module/dist/<module_id>.py` by default.
+
+`cubkit types` downloads MCUB `core/lib/types/*.py` into `core/lib/types/` for
+local type hints and adds `core/` to `.gitignore`.
 
 ## Project layout
 
@@ -57,6 +61,8 @@ description = "Built with CubKit"
 # Optional source root for code files.
 src = "src"
 entrypoint = "main.py"
+# Optional output path for cubkit build when -o is not used.
+out = "dist/my_module.py"
 # One package dir or several package dirs are supported.
 package = "my_module_lib"
 # package = ["my_module_lib", "shared_helpers"]
@@ -73,6 +79,8 @@ path = "vendor/genipng"
 
 When `src = "src"` is set, code paths like `entrypoint`, `package` and `sources`
 are resolved inside `src/`. Non-code assets remain relative to the project root.
+When `out` is set, `cubkit build` writes there by default. CLI `-o/--output`
+overrides manifest `out`.
 
 CubKit writes MCUB metadata comments into the generated main artifact before the
 bootstrap code, for example `# name:`, `# version:` and optional `# author:`,

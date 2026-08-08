@@ -33,6 +33,7 @@ class Manifest:
     name: str
     source_root: Path
     entrypoint: Path
+    out: Path | None = None
     version: str | None = None
     author: str = "unknown"
     description: str = ""
@@ -76,6 +77,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     entrypoint = _project_path(
         source_root, _required_str(data, "entrypoint"), "entrypoint"
     )
+    out = _optional_project_path(project_dir, data.get("out"), "out")
     package = _optional_project_paths(source_root, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
     sources = _optional_project_paths(source_root, data.get("sources"), "sources")
@@ -91,6 +93,8 @@ def load_manifest(project_dir: Path) -> Manifest:
         raise ManifestError(f"src does not exist or is not a directory: {source_root}")
     if not entrypoint.is_file():
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
+    if out is not None and out.suffix != ".py":
+        raise ManifestError("out must be a .py file")
     for package_path in package:
         if not package_path.is_dir():
             raise ManifestError(
@@ -104,6 +108,7 @@ def load_manifest(project_dir: Path) -> Manifest:
         module_id=module_id,
         name=name,
         source_root=source_root,
+        out=out,
         version=version,
         author=author,
         description=description,

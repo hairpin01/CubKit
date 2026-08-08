@@ -54,11 +54,12 @@ def build_project(
     payload = build_zip_payload(files)
     rendered = render_module(manifest, payload, bundle_files=files)
 
-    output_path = (
-        output.resolve()
-        if output is not None
-        else project_dir / "dist" / f"{default_artifact_stem(manifest)}.py"
-    )
+    if output is not None:
+        output_path = output.resolve()
+    elif manifest.out is not None:
+        output_path = manifest.out
+    else:
+        output_path = project_dir / "dist" / f"{default_artifact_stem(manifest)}.py"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(rendered, encoding="utf-8")
     return output_path

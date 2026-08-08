@@ -47,11 +47,14 @@ my_module/
 id = "my_module"
 src = "src"
 entrypoint = "main.py"
+out = "dist/my_module.py"
 ```
 
 When `src = "src"` is set, code paths (`entrypoint`, `package`, `sources`) are
 resolved inside `src/`. This keeps build config in the project root while module
 code lives in `src/`.
+When `out` is set, `cubkit build` writes there by default. CLI `-o/--output`
+overrides manifest `out`.
 
 Optional metadata:
 
@@ -327,6 +330,7 @@ cubkit_full_example/
 id = "cubkit_full_example"
 src = "src"
 entrypoint = "main.py"
+# out = "dist/cubkit-full-example.py"
 package = "test_module"
 sign = true
 ```
@@ -526,9 +530,15 @@ python -m py_compile dist/MyModule.py
 
 ```bash
 cubkit init my_module
+cubkit types my_module
 cubkit check my_module
 cubkit build my_module
 ```
 
 `cubkit build` prints progress with processed files and writes the final artifact
 to `dist/<module-name>.py`.
+
+`cubkit types` downloads MCUB type helper files from
+`hairpin01/MCUB-fork/core/lib/types/*.py` into local `core/lib/types/` and adds
+`core/` to `.gitignore`. This is for IDE/type-checking convenience; the generated
+module artifact does not need those files bundled.
