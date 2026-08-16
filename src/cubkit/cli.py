@@ -14,6 +14,8 @@ from . import __version__
 from .builder import build_project, check_project
 from .errors import CubKitError
 from .migration import migrate_manifest
+from .manifest import load_manifest
+from .linter import lint_entrypoint
 from .types_sync import sync_mcub_types
 
 
@@ -49,6 +51,8 @@ def _make_parser() -> argparse.ArgumentParser:
         "check", help="validate a CubKit module project"
     )
     check_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    _add_profile_arguments(check_parser)
+    check_parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
     check_parser.set_defaults(func=_cmd_check)
 
     build_parser = subparsers.add_parser(
@@ -56,7 +60,13 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
+    _add_profile_arguments(build_parser)
+    build_parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
     build_parser.set_defaults(func=_cmd_build)
+
+    lint_parser = subparsers.add_parser("lint", help="check an MCUB module entrypoint")
+    lint_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    lint_parser.set_defaults(func=_cmd_lint)
 
     types_parser = subparsers.add_parser(
         "types", help="download MCUB core/lib/types into a project"
@@ -70,6 +80,12 @@ def _make_parser() -> argparse.ArgumentParser:
     migrate_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     migrate_parser.set_defaults(func=_cmd_migrate)
     return parser
+
+
+def _add_profile_arguments(parser: argparse.ArgumentParser) -> None:
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument("--debug", action="store_const", const="debug", dest="profile", help="use debug output and hooks")
+    profiles.add_argument("--release", action="store_const", const="release", dest="profile", help="use release output and hooks")
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -96,7 +112,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    count = check_project(args.path)
+    count = check_project(args.path, profile=args.profile, run_configured_hooks=not args.skip_hooks)
     print(f"ok: {args.path} ({count} embedded file(s))")
     return 0
 
@@ -111,12 +127,25 @@ def _cmd_build(args: argparse.Namespace) -> int:
             progress=reporter.ok,
             status=reporter.status,
             dependency_progress=reporter.dependency,
+            profile=args.profile,
+            run_configured_hooks=not args.skip_hooks,
         )
     finally:
         reporter.finish()
     print(f"📐 Done! in {_format_elapsed(time.monotonic() - reporter.started)}.")
     print(f"built: {output}")
     return 0
+
+
+def _cmd_lint(args: argparse.Namespace) -> int:
+    manifest = load_manifest(args.path)
+    issues = lint_entrypoint(manifest.entrypoint)
+    if not issues:
+        print(f"ok: {manifest.entrypoint}")
+        return 0
+    for issue in issues:
+        print(f"{manifest.entrypoint}:{issue.line}: {issue.message}", file=sys.stderr)
+    return 1
 
 
 def _cmd_types(args: argparse.Namespace) -> int:

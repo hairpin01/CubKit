@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
+import fnmatch
 from pathlib import Path, PurePosixPath
 from typing import Callable
 
@@ -68,7 +69,36 @@ def collect_bundle_files(
         files.extend(_collect_tree(manifest.assets, manifest.assets.parent))
     if manifest.locales is not None:
         files.extend(_collect_tree(manifest.locales, manifest.locales.parent))
-    return sorted(_dedupe(files), key=lambda item: item.archive_name)
+    files.extend(_collect_includes(manifest))
+    files = _dedupe(files)
+    if manifest.exclude:
+        files = [
+            item for item in files
+            if not any(fnmatch.fnmatchcase(item.archive_name, pattern) for pattern in manifest.exclude)
+        ]
+    return sorted(files, key=lambda item: item.archive_name)
+
+
+def _collect_includes(manifest: Manifest) -> list[BundleFile]:
+    """Collect explicit project-relative files requested by manifest patterns."""
+
+    included: list[BundleFile] = []
+    for pattern in manifest.include:
+        for path in manifest.project_dir.glob(pattern):
+            if path.is_file() and _is_includable(path):
+                included.append(
+                    BundleFile(
+                        source=path,
+                        archive_name=path.relative_to(manifest.project_dir).as_posix(),
+                    )
+                )
+    return included
+
+
+def _is_includable(path: Path) -> bool:
+    return not any(part in EXCLUDED_DIRS for part in path.parts) and (
+        path.name not in EXCLUDED_FILES and path.suffix not in EXCLUDED_SUFFIXES
+    )
 
 
 def _collect_source(source: Path) -> list[BundleFile]:

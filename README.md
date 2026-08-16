@@ -70,15 +70,26 @@ requires = ["aiohttp"]
 source = "src"
 entrypoint = "main.py"
 output = "dist/my_module.py"
+debug_output = "dist/my_module-debug.py"
+release_output = "../module-repository/my_module.py"
 packages = ["my_module_lib"]
 sources = ["utils.py"]
 assets = "assets"
 locales = "locales"
 sign = true
+include = ["resources/**/*.json"]
+exclude = ["resources/private-*.json"]
+fail_on_secrets = true
 
 [libs.genipng]
 type = "local"
 path = "vendor/genipng"
+
+[hooks]
+pre_build = ["python", "scripts/generate_version.py"]
+
+[hooks.release]
+post_build = ["python", "scripts/publish.py", "{output}"]
 ```
 
 When `source = "src"` is set, code paths like `entrypoint`, `packages` and `sources`
@@ -86,6 +97,15 @@ are resolved inside `src/`. Non-code assets and locales remain relative to the
 project root.
 When `output` is set, `cubkit build` writes there by default. CLI `-o/--output`
 overrides the manifest output.
+Use `cubkit build --debug` or `cubkit build --release` to select the matching
+profile output. Profile hooks (for example `[hooks.release]`) run only when that
+profile is selected.
+
+`include` adds project-relative glob matches to the bundle; `exclude` removes
+matches from the final bundle. With `fail_on_secrets = true`, `check` and `build`
+stop when a bundled text file resembles a private key, API token, or Telegram bot
+token. Use `cubkit lint` to check that the entrypoint has an MCUB `ModuleBase`/
+`Module` subclass or a function-style `register()` entrypoint.
 
 Legacy flat manifests remain supported. Convert one with:
 

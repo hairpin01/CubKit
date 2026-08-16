@@ -15,7 +15,8 @@ MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
 V1_FIELDS = {
     "id", "name", "version", "author", "description", "src", "entrypoint",
     "out", "package", "assets", "locales", "sources", "requires",
-    "banner_url", "scop", "sign",
+    "banner_url", "scop", "sign", "debug_output", "release_output", "include",
+    "exclude", "fail_on_secrets",
 }
 V2_MODULE_FIELDS = {
     "id", "name", "version", "author", "description", "requires",
@@ -23,7 +24,8 @@ V2_MODULE_FIELDS = {
 }
 V2_BUNDLE_FIELDS = {
     "source", "entrypoint", "output", "packages", "sources", "assets",
-    "locales", "sign",
+    "locales", "sign", "debug_output", "release_output", "include", "exclude",
+    "fail_on_secrets",
 }
 
 
@@ -40,11 +42,20 @@ class LibrarySpec:
 
 
 @dataclass(frozen=True)
+class Hooks:
+    """Commands run around CubKit operations."""
+
+    common: dict[str, tuple[tuple[str, ...], ...]]
+    profiles: dict[str, dict[str, tuple[tuple[str, ...], ...]]]
+
+
+@dataclass(frozen=True)
 class Manifest:
     """CubKit module manifest."""
 
     module_id: str
     name: str
+    project_dir: Path
     source_root: Path
     entrypoint: Path
     format_version: int = 1
@@ -61,6 +72,12 @@ class Manifest:
     banner_url: str | None = None
     scop: str | None = None
     sign: bool = False
+    debug_out: Path | None = None
+    release_out: Path | None = None
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+    fail_on_secrets: bool = False
+    hooks: Hooks | None = None
 
 
 def find_manifest(project_dir: Path) -> Path:
@@ -104,6 +121,12 @@ def load_manifest(project_dir: Path) -> Manifest:
     banner_url = _optional_str(data, "banner_url", default=None)
     scop = _optional_str(data, "scop", default=None)
     sign = _optional_bool(data, "sign", default=False)
+    debug_out = _optional_project_path(project_dir, data.get("debug_output"), "debug_output")
+    release_out = _optional_project_path(project_dir, data.get("release_output"), "release_output")
+    include = _optional_str_tuple(data, "include")
+    exclude = _optional_str_tuple(data, "exclude")
+    fail_on_secrets = _optional_bool(data, "fail_on_secrets", default=False)
+    hooks = _optional_hooks(data.get("hooks"))
 
     if not MODULE_ID_RE.fullmatch(module_id):
         raise ManifestError("id must match /^[a-z][a-z0-9_]{1,31}$/")
@@ -113,6 +136,9 @@ def load_manifest(project_dir: Path) -> Manifest:
         raise ManifestError(f"entrypoint does not exist or is not a file: {entrypoint}")
     if out is not None and out.suffix != ".py":
         raise ManifestError("out must be a .py file")
+    for output_name, output_path in (("debug_output", debug_out), ("release_output", release_out)):
+        if output_path is not None and output_path.suffix != ".py":
+            raise ManifestError(f"{output_name} must be a .py file")
     for package_path in package:
         if not package_path.is_dir():
             raise ManifestError(
@@ -131,6 +157,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     return Manifest(
         module_id=module_id,
         name=name,
+        project_dir=project_dir,
         source_root=source_root,
         out=out,
         format_version=format_version,
@@ -147,6 +174,12 @@ def load_manifest(project_dir: Path) -> Manifest:
         banner_url=banner_url,
         scop=scop,
         sign=sign,
+        debug_out=debug_out,
+        release_out=release_out,
+        include=include,
+        exclude=exclude,
+        fail_on_secrets=fail_on_secrets,
+        hooks=hooks,
     )
 
 
@@ -166,7 +199,7 @@ def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object]
         raise ManifestError(
             "format 2 cannot mix legacy root fields: " + ", ".join(mixed)
         )
-    unknown_root = sorted(set(data) - {"format", "module", "bundle", "libs"})
+    unknown_root = sorted(set(data) - {"format", "module", "bundle", "libs", "hooks"})
     if unknown_root:
         raise ManifestError("unknown format 2 fields: " + ", ".join(unknown_root))
 
@@ -185,6 +218,9 @@ def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object]
         "source": "src", "entrypoint": "entrypoint", "output": "out",
         "packages": "package", "sources": "sources", "assets": "assets",
         "locales": "locales", "sign": "sign",
+        "debug_output": "debug_output", "release_output": "release_output",
+        "include": "include", "exclude": "exclude",
+        "fail_on_secrets": "fail_on_secrets",
     }
     for source, target in module_map.items():
         if source in module:
@@ -194,6 +230,8 @@ def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object]
             normalized[target] = bundle[source]
     if "libs" in data:
         normalized["libs"] = data["libs"]
+    if "hooks" in data:
+        normalized["hooks"] = data["hooks"]
     return normalized, 2
 
 
@@ -256,6 +294,59 @@ def _optional_bool(data: dict[str, object], key: str, *, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ManifestError(f"{key!r} must be true or false when provided")
     return value
+
+
+def _optional_hooks(value: object) -> Hooks | None:
+    """Validate hooks while keeping command execution separate from parsing."""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ManifestError("'hooks' must be a table")
+
+    common: dict[str, tuple[tuple[str, ...], ...]] = {}
+    profiles: dict[str, dict[str, tuple[tuple[str, ...], ...]]] = {}
+    allowed_events = {"pre_check", "post_check", "pre_build", "post_build"}
+    for name, commands in value.items():
+        if name in {"debug", "release"}:
+            if not isinstance(commands, dict):
+                raise ManifestError(f"[hooks.{name}] must be a table")
+            profiles[name] = _parse_hook_events(commands, allowed_events, f"hooks.{name}")
+        elif name in allowed_events:
+            common[name] = _parse_hook_commands(commands, f"hooks.{name}")
+        else:
+            raise ManifestError(f"unknown [hooks] field: {name}")
+    return Hooks(common=common, profiles=profiles)
+
+
+def _parse_hook_events(
+    values: dict[str, object], allowed: set[str], table: str
+) -> dict[str, tuple[tuple[str, ...], ...]]:
+    events: dict[str, tuple[tuple[str, ...], ...]] = {}
+    for event, commands in values.items():
+        if event not in allowed:
+            raise ManifestError(f"unknown [{table}] field: {event}")
+        events[event] = _parse_hook_commands(commands, f"{table}.{event}")
+    return events
+
+
+def _parse_hook_commands(value: object, key: str) -> tuple[tuple[str, ...], ...]:
+    """Parse an argv list or a list of argv lists without invoking a shell."""
+
+    if not isinstance(value, list) or not value:
+        raise ManifestError(f"{key!r} must be a non-empty list of command arguments")
+    if all(isinstance(item, str) and item for item in value):
+        return (tuple(value),)
+    commands: list[tuple[str, ...]] = []
+    for command in value:
+        if not isinstance(command, list) or not command or not all(
+            isinstance(arg, str) and arg for arg in command
+        ):
+            raise ManifestError(
+                f"{key!r} must be an argv list or a list of non-empty argv lists"
+            )
+        commands.append(tuple(command))
+    return tuple(commands)
 
 
 def _optional_libraries(project_dir: Path, value: object) -> tuple[LibrarySpec, ...]:

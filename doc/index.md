@@ -61,6 +61,72 @@ code lives in `src/`.
 When `output` is set, `cubkit build` writes there by default. CLI `-o/--output`
 overrides the manifest output.
 
+## Build profiles
+
+Keep experimental and repository-ready artifacts separate with profile outputs:
+
+```toml
+[bundle]
+output = "dist/module.py"
+debug_output = "dist/module-debug.py"
+release_output = "../modules-repository/module.py"
+```
+
+```bash
+cubkit build . --debug
+cubkit build . --release
+```
+
+`-o/--output` always overrides every configured output. `check` also accepts
+`--debug` and `--release`, so its profile hooks can be tested before a build.
+
+## Hooks
+
+Hooks run commands without a shell, from the project directory. One command is an
+argv array; use a nested array for several commands. A failed command stops the
+CubKit operation.
+
+```toml
+[hooks]
+pre_check = ["python", "scripts/check_locales.py"]
+pre_build = ["python", "scripts/generate_version.py"]
+
+[hooks.release]
+post_build = ["python", "scripts/publish.py", "{output}"]
+```
+
+Available events are `pre_check`, `post_check`, `pre_build`, and `post_build`.
+`[hooks.debug]` and `[hooks.release]` commands run only with their corresponding
+CLI flag. Available placeholders are `{project_dir}`, `{manifest}`, `{module_id}`,
+`{command}`, `{output}`, and `{profile}`; the same values are exported as
+`CUBKIT_*` environment variables. Use `--skip-hooks` to bypass hooks temporarily.
+
+## Bundle include/exclude and secret checks
+
+Explicitly include resources that are outside `assets` or `locales`, then exclude
+unwanted matches from the final payload:
+
+```toml
+[bundle]
+include = ["resources/**/*.json", "templates/*.html"]
+exclude = ["resources/private-*.json"]
+fail_on_secrets = true
+```
+
+`fail_on_secrets` rejects bundled UTF-8 files containing likely private keys, API
+keys, session strings, or Telegram bot tokens. It is opt-in to avoid breaking
+existing projects; enable it for every distributable module.
+
+## Linting MCUB entrypoints
+
+```bash
+cubkit lint .
+```
+
+The linter checks that `main.py` has a `ModuleBase`/`Module` subclass or a
+function-style `register()` entrypoint. It also warns about multiple module
+classes and synchronous `@command` handlers.
+
 Assets and locale directories are always resolved from the project root, not
 from `src`.
 
