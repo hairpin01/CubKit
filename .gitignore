@@ -12,3 +12,4 @@ dist/
 .env
 *.session
 *.session-journal
+.sisyphus/

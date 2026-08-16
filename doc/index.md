@@ -44,29 +44,56 @@ my_module/
 `cubkit.toml` can be tiny:
 
 ```toml
+format = 2
+
+[module]
 id = "my_module"
-src = "src"
+
+[bundle]
+source = "src"
 entrypoint = "main.py"
-out = "dist/my_module.py"
+output = "dist/my_module.py"
 ```
 
-When `src = "src"` is set, code paths (`entrypoint`, `package`, `sources`) are
+When `source = "src"` is set, code paths (`entrypoint`, `packages`, `sources`) are
 resolved inside `src/`. This keeps build config in the project root while module
 code lives in `src/`.
-When `out` is set, `cubkit build` writes there by default. CLI `-o/--output`
-overrides manifest `out`.
+When `output` is set, `cubkit build` writes there by default. CLI `-o/--output`
+overrides the manifest output.
+
+Assets and locale directories are always resolved from the project root, not
+from `src`.
 
 Optional metadata:
 
 ```toml
+[module]
 name = "MyModule"
 version = "dev"
 author = "@username"
 description = "Example MCUB module"
 requires = ["aiohttp"]
-scop = "inline"
+scope = "inline"
+
+[bundle]
 sign = true
 ```
+
+## Manifest versions and migration
+
+Format 2 separates module metadata from build layout. Legacy flat manifests are
+still accepted, but new projects use `format = 2`. Do not mix root-level legacy
+fields with `[module]` or `[bundle]`; CubKit rejects ambiguous manifests.
+
+Migrate an existing project with:
+
+```bash
+cubkit migrate .
+```
+
+The original is saved as `cubkit.toml.bak`, then the converted manifest is
+validated before the command succeeds. Running the command on format 2 is a
+no-op.
 
 ## What to write in the main file
 
@@ -161,18 +188,23 @@ For larger modules, put helpers into one or more package directories:
 ```text
 my_module/
   cubkit.toml
-  main.py
-  my_module_lib/
-    __init__.py
-    client.py
-  shared_helpers/
-    format.py
+  src/
+    main.py
+    my_module_lib/
+      __init__.py
+      client.py
+    shared_helpers/
+      format.py
 ```
 
 ```toml
+[module]
 id = "my_module"
+
+[bundle]
+source = "src"
 entrypoint = "main.py"
-package = ["my_module_lib", "shared_helpers"]
+packages = ["my_module_lib", "shared_helpers"]
 ```
 
 In `main.py`:
@@ -184,6 +216,141 @@ from .format import pretty_text
 
 CubKit adds all package directories to the generated module's private import
 search path.
+
+## Runtime environment, assets and localization
+
+CubKit keeps the MCUB-compatible single `.py` output, but the generated artifact
+contains a structured, isolated environment for its bundled files. Import it
+relative to the module:
+
+```python
+from cubkit import (
+    assets,
+    get_environment,
+    load_strings,
+    metadata,
+    resource,
+    root,
+)
+```
+
+The generated bootstrap publishes these values before the entrypoint runs. Use
+direct imports as shown above so each loaded module keeps its own runtime values.
+
+### Assets
+
+Declare the directory in `cubkit.toml`:
+
+```toml
+[bundle]
+assets = "assets"
+```
+
+Then access files without constructing cache paths:
+
+```python
+icon_path = assets.get("icon.png")
+icon_bytes = assets.read_bytes("icon.png")
+template = assets.read_text("templates/message.html")
+config = assets.read_json("defaults.json")
+
+# Alias for assets.get(...)
+same_icon_path = resource("icon.png")
+```
+
+Available operations:
+
+- `assets.root`: extracted assets directory or `None`;
+- `assets.available` and `bool(assets)`: whether the module has assets;
+- `assets.get(path)`: existing file/directory as `pathlib.Path`;
+- `assets.exists(path)`: safe existence check;
+- `assets.read_bytes`, `read_text`, and `read_json`.
+
+Asset lookup resolves symlinks and rejects `..` or any other path which escapes
+the configured directory.
+
+### Metadata and environment
+
+`metadata` is a read-only mapping with the effective `id`, `name`, `version`,
+`author`, `description`, `requires`, `banner_url`, and `scop`. Literal class/header
+metadata used by the generated MCUB artifact is reflected here too.
+
+`root` is the extracted private bundle directory. `get_environment()` returns a
+read-only mapping containing `root`, `assets`, `locales`, and `metadata`. Prefer
+the dedicated asset API for distributable resource paths; the bundle root is
+mainly useful for diagnostics and advanced integrations.
+
+### Localization
+
+Configure a locale directory:
+
+```toml
+[bundle]
+locales = "locales"
+```
+
+Each direct child is one locale and contains an ordinary string-keyed mapping.
+The filename stem must be a lowercase two- or three-letter MCUB language code
+such as `en`, `ru`, or `uk`. Regional names (`en-US`, `ru-RU`) and uppercase
+codes are rejected instead of being silently normalized. YAML/YML, JSON, and
+TOML are supported:
+
+```text
+locales/
+  en.yaml
+  ru.yaml
+  uk.yaml
+```
+
+`locales/en.yaml`:
+
+```yaml
+help: "Help for {name}"
+done: "Done"
+errors:
+  unavailable: "Service is unavailable"
+```
+
+`locales/ru.yaml`:
+
+```yaml
+help: "Помощь для {name}"
+done: "Готово"
+errors:
+  unavailable: "Сервис недоступен"
+```
+
+Use `load_strings` as the native `ModuleBase.strings` class attribute:
+
+```python
+from core.lib.loader.module_base import ModuleBase
+from cubkit import load_strings
+
+
+class Mod(ModuleBase):
+    strings = load_strings()
+
+    async def show_help(self, event) -> None:
+        await event.edit(self.strings("help", name=self.name))
+```
+
+`load_strings()` returns a fresh regular dictionary on every call:
+
+```python
+{
+    "en": {"help": "Help for {name}", "done": "Done", ...},
+    "ru": {"help": "Помощь для {name}", "done": "Готово", ...},
+}
+```
+
+There is no CubKit translation object and no separate locale selection. After
+MCUB constructs the module, its native `utils.strings.Strings` handles
+`self.strings(...)`, nested groups, the configured language, and the English
+fallback exactly like an inline class dictionary.
+
+`cubkit check` and `cubkit build` validate locale syntax and require every leaf
+value to be a string. Files with unsupported extensions are bundled as ordinary
+files but are not returned by `load_strings()`.
 
 ## Vendored libraries
 
@@ -208,7 +375,12 @@ my_module/
 `cubkit.toml`:
 
 ```toml
+format = 2
+
+[module]
 id = "my_module"
+
+[bundle]
 entrypoint = "main.py"
 
 [libs.genipng]
@@ -327,11 +499,16 @@ cubkit_full_example/
 `cubkit.toml`:
 
 ```toml
+format = 2
+
+[module]
 id = "cubkit_full_example"
-src = "src"
+
+[bundle]
+source = "src"
 entrypoint = "main.py"
-# out = "dist/cubkit-full-example.py"
-package = "test_module"
+# output = "dist/cubkit-full-example.py"
+packages = ["test_module"]
 sign = true
 ```
 
@@ -451,6 +628,7 @@ attribute `name = "cubkit-full-example"` is used as the MCUB module name.
 With:
 
 ```toml
+[bundle]
 sign = true
 ```
 

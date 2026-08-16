@@ -8,9 +8,23 @@ import re
 import tomllib
 
 from .errors import ManifestError
+from .localization import load_locales
 
 MANIFEST_NAMES = ("cubkit.toml", "mcub.toml")
 MODULE_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,31}$")
+V1_FIELDS = {
+    "id", "name", "version", "author", "description", "src", "entrypoint",
+    "out", "package", "assets", "locales", "sources", "requires",
+    "banner_url", "scop", "sign",
+}
+V2_MODULE_FIELDS = {
+    "id", "name", "version", "author", "description", "requires",
+    "banner_url", "scope",
+}
+V2_BUNDLE_FIELDS = {
+    "source", "entrypoint", "output", "packages", "sources", "assets",
+    "locales", "sign",
+}
 
 
 @dataclass(frozen=True)
@@ -33,12 +47,14 @@ class Manifest:
     name: str
     source_root: Path
     entrypoint: Path
+    format_version: int = 1
     out: Path | None = None
     version: str | None = None
     author: str = "unknown"
     description: str = ""
     package: tuple[Path, ...] = ()
     assets: Path | None = None
+    locales: Path | None = None
     sources: tuple[Path, ...] = ()
     libs: tuple[LibrarySpec, ...] = ()
     requires: tuple[str, ...] = ()
@@ -64,10 +80,11 @@ def load_manifest(project_dir: Path) -> Manifest:
     project_dir = project_dir.resolve()
     manifest_path = find_manifest(project_dir)
     try:
-        data = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_data = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ManifestError(f"invalid TOML in {manifest_path}: {exc}") from exc
 
+    data, format_version = _normalize_manifest_data(raw_data)
     module_id = _required_str(data, "id")
     name = _optional_str(data, "name", default=module_id)
     version = _optional_str(data, "version", default=None)
@@ -80,6 +97,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     out = _optional_project_path(project_dir, data.get("out"), "out")
     package = _optional_project_paths(source_root, data.get("package"), "package")
     assets = _optional_project_path(project_dir, data.get("assets"), "assets")
+    locales = _optional_project_path(project_dir, data.get("locales"), "locales")
     sources = _optional_project_paths(source_root, data.get("sources"), "sources")
     libs = _optional_libraries(project_dir, data.get("libs"))
     requires = _optional_str_tuple(data, "requires")
@@ -102,6 +120,12 @@ def load_manifest(project_dir: Path) -> Manifest:
             )
     if assets is not None and not assets.is_dir():
         raise ManifestError(f"assets does not exist or is not a directory: {assets}")
+    if locales is not None:
+        if not locales.is_dir():
+            raise ManifestError(
+                f"locales does not exist or is not a directory: {locales}"
+            )
+        load_locales(locales)
 
     _compile_python(entrypoint)
     return Manifest(
@@ -109,12 +133,14 @@ def load_manifest(project_dir: Path) -> Manifest:
         name=name,
         source_root=source_root,
         out=out,
+        format_version=format_version,
         version=version,
         author=author,
         description=description,
         entrypoint=entrypoint,
         package=package,
         assets=assets,
+        locales=locales,
         sources=sources,
         libs=libs,
         requires=requires,
@@ -122,6 +148,68 @@ def load_manifest(project_dir: Path) -> Manifest:
         scop=scop,
         sign=sign,
     )
+
+
+def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object], int]:
+    """Normalize legacy and format-2 manifests to the internal flat schema."""
+
+    has_v2_sections = "module" in data or "bundle" in data
+    if not has_v2_sections and "format" not in data:
+        return data, 1
+
+    format_value = data.get("format")
+    if type(format_value) is not int or format_value != 2:
+        raise ManifestError("structured manifests must declare format = 2")
+
+    mixed = sorted(V1_FIELDS.intersection(data))
+    if mixed:
+        raise ManifestError(
+            "format 2 cannot mix legacy root fields: " + ", ".join(mixed)
+        )
+    unknown_root = sorted(set(data) - {"format", "module", "bundle", "libs"})
+    if unknown_root:
+        raise ManifestError("unknown format 2 fields: " + ", ".join(unknown_root))
+
+    module = _required_table(data, "module")
+    bundle = _required_table(data, "bundle")
+    _reject_unknown_table_fields(module, V2_MODULE_FIELDS, "module")
+    _reject_unknown_table_fields(bundle, V2_BUNDLE_FIELDS, "bundle")
+
+    normalized: dict[str, object] = {}
+    module_map = {
+        "id": "id", "name": "name", "version": "version",
+        "author": "author", "description": "description", "requires": "requires",
+        "banner_url": "banner_url", "scope": "scop",
+    }
+    bundle_map = {
+        "source": "src", "entrypoint": "entrypoint", "output": "out",
+        "packages": "package", "sources": "sources", "assets": "assets",
+        "locales": "locales", "sign": "sign",
+    }
+    for source, target in module_map.items():
+        if source in module:
+            normalized[target] = module[source]
+    for source, target in bundle_map.items():
+        if source in bundle:
+            normalized[target] = bundle[source]
+    if "libs" in data:
+        normalized["libs"] = data["libs"]
+    return normalized, 2
+
+
+def _required_table(data: dict[str, object], key: str) -> dict[str, object]:
+    value = data.get(key)
+    if not isinstance(value, dict):
+        raise ManifestError(f"format 2 requires a [{key}] table")
+    return value
+
+
+def _reject_unknown_table_fields(
+    data: dict[str, object], allowed: set[str], table: str
+) -> None:
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise ManifestError(f"unknown [{table}] fields: {', '.join(unknown)}")
 
 
 def _required_str(data: dict[str, object], key: str) -> str:

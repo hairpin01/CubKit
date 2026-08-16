@@ -48,28 +48,32 @@ my_module/
       utils.py
   assets/
     icon.png
+  locales/
+    en.yaml
+    ru.yaml
 ```
 
 `cubkit.toml`:
 
 ```toml
+format = 2
+
+[module]
 id = "my_module"
 name = "My Module"
 version = "0.1.0"
 author = "unknown"
 description = "Built with CubKit"
-# Optional source root for code files.
-src = "src"
+requires = ["aiohttp"]
+
+[bundle]
+source = "src"
 entrypoint = "main.py"
-# Optional output path for cubkit build when -o is not used.
-out = "dist/my_module.py"
-# One package dir or several package dirs are supported.
-package = "my_module_lib"
-# package = ["my_module_lib", "shared_helpers"]
-assets = "assets"
-# Optional root-private files for `from .utils import ...` in the entrypoint.
+output = "dist/my_module.py"
+packages = ["my_module_lib"]
 sources = ["utils.py"]
-# Optional deterministic build signature comments.
+assets = "assets"
+locales = "locales"
 sign = true
 
 [libs.genipng]
@@ -77,10 +81,20 @@ type = "local"
 path = "vendor/genipng"
 ```
 
-When `src = "src"` is set, code paths like `entrypoint`, `package` and `sources`
-are resolved inside `src/`. Non-code assets remain relative to the project root.
-When `out` is set, `cubkit build` writes there by default. CLI `-o/--output`
-overrides manifest `out`.
+When `source = "src"` is set, code paths like `entrypoint`, `packages` and `sources`
+are resolved inside `src/`. Non-code assets and locales remain relative to the
+project root.
+When `output` is set, `cubkit build` writes there by default. CLI `-o/--output`
+overrides the manifest output.
+
+Legacy flat manifests remain supported. Convert one with:
+
+```bash
+cubkit migrate my_module
+```
+
+CubKit saves the original as `cubkit.toml.bak`. Format 2 rejects mixed legacy
+root fields so configuration mistakes fail explicitly.
 
 CubKit writes MCUB metadata comments into the generated main artifact before the
 bootstrap code, for example `# name:`, `# version:` and optional `# author:`,
@@ -103,6 +117,53 @@ CubKit auto-detects simple relative imports from sibling files. You can also add
 helper files manually to `sources`. Package directories may be declared as a
 single string or a list. CubKit loads bundled helpers through a private package
 name, so they do not collide with MCUB's global `utils`, `lib`, or other modules.
+
+## Runtime environment
+
+Bundled modules have an isolated runtime facade available through a private
+relative import:
+
+```python
+from core.lib.loader.module_base import ModuleBase
+from cubkit import (
+    assets,
+    get_environment,
+    load_strings,
+    metadata,
+    resource,
+    root,
+)
+
+
+class Mod(ModuleBase):
+    strings = load_strings()
+
+icon_path = resource("icon.png")
+raw_icon = assets.read_bytes("icon.png")
+module_name = metadata["name"]
+assert root == get_environment()["root"]
+```
+
+`assets` provides safe path lookup plus `read_bytes`, `read_text`, and
+`read_json`. Paths are constrained to the configured assets directory.
+`metadata` is a read-only mapping generated from `cubkit.toml` and literal
+entrypoint metadata.
+
+`load_strings()` returns the ordinary dictionary expected by MCUB's native
+`ModuleBase.strings`. Localization files are direct children of `locales` and
+use plain lowercase language filenames such as `en.yaml`, `ru.yaml`, and
+`uk.yaml`; regional names such as `ru-RU` are intentionally rejected. YAML,
+JSON, and TOML mappings are supported:
+
+```yaml
+help: "Help for {name}"
+done: "Done"
+```
+
+CubKit builds these files into `{"en": {...}, "ru": {...}}`; MCUB then selects
+the language and English fallback itself. Inside module methods use the normal
+`self.strings("help", name=...)` or `self.strings["done"]` API. CubKit does not
+add a second translation runtime.
 
 Local libraries declared in `[libs]` are vendored into the artifact and can be
 imported with:

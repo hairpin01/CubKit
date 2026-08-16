@@ -13,6 +13,7 @@ import time
 from . import __version__
 from .builder import build_project, check_project
 from .errors import CubKitError
+from .migration import migrate_manifest
 from .types_sync import sync_mcub_types
 
 
@@ -62,6 +63,12 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     types_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     types_parser.set_defaults(func=_cmd_types)
+
+    migrate_parser = subparsers.add_parser(
+        "migrate", help="migrate a legacy manifest to format 2"
+    )
+    migrate_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    migrate_parser.set_defaults(func=_cmd_migrate)
     return parser
 
 
@@ -69,20 +76,21 @@ def _cmd_init(args: argparse.Namespace) -> int:
     project_dir = args.path.resolve()
     module_id = args.module_id or _normalize_module_id(project_dir.name)
     package_name = f"{module_id}_lib"
+    source_dir = project_dir / "src"
     project_dir.mkdir(parents=True, exist_ok=True)
-    (project_dir / package_name).mkdir(exist_ok=True)
+    (source_dir / package_name).mkdir(parents=True, exist_ok=True)
     (project_dir / "assets").mkdir(exist_ok=True)
 
     _write_new(
         project_dir / "cubkit.toml",
         _manifest_template(module_id, project_dir.name, package_name),
     )
-    _write_new(project_dir / "main.py", _entrypoint_template(package_name))
+    _write_new(source_dir / "main.py", _entrypoint_template(package_name))
     _write_new(
-        project_dir / package_name / "__init__.py",
+        source_dir / package_name / "__init__.py",
         '"""Private package for this MCUB module."""\n',
     )
-    _write_new(project_dir / package_name / "utils.py", _utils_template())
+    _write_new(source_dir / package_name / "utils.py", _utils_template())
     print(f"created CubKit module project: {project_dir}")
     return 0
 
@@ -122,6 +130,16 @@ def _cmd_types(args: argparse.Namespace) -> int:
         print(f"OK {label}")
     print(f"types: downloaded {len(written)} file(s) into {project_dir / 'core' / 'lib' / 'types'}")
     print("gitignore: core/")
+    return 0
+
+
+def _cmd_migrate(args: argparse.Namespace) -> int:
+    path, backup, changed = migrate_manifest(args.path)
+    if not changed:
+        print(f"already format 2: {path}")
+        return 0
+    print(f"migrated: {path}")
+    print(f"backup: {backup}")
     return 0
 
 
@@ -282,15 +300,21 @@ def _normalize_module_id(value: str) -> str:
 
 def _manifest_template(module_id: str, name: str, package_name: str) -> str:
     return textwrap.dedent(f"""
+        format = 2
+
+        [module]
         id = {module_id!r}
         name = {name!r}
         version = "0.1.0"
         author = "unknown"
         description = "Built with CubKit"
+
+        [bundle]
+        source = "src"
         entrypoint = "main.py"
         # Optional output path for cubkit build when -o is not used.
-        # out = "dist/{module_id}.py"
-        package = {package_name!r}
+        # output = "dist/{module_id}.py"
+        packages = [{package_name!r}]
         assets = "assets"
         """).lstrip()
 

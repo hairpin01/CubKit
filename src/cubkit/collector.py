@@ -66,6 +66,8 @@ def collect_bundle_files(
     )
     if manifest.assets is not None:
         files.extend(_collect_tree(manifest.assets, manifest.assets.parent))
+    if manifest.locales is not None:
+        files.extend(_collect_tree(manifest.locales, manifest.locales.parent))
     return sorted(_dedupe(files), key=lambda item: item.archive_name)
 
 
