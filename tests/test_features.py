@@ -123,6 +123,9 @@ pre_build = ["python", "scripts/output.py"]
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(["lint", str(project)]), 1)
             self.assertIn("main(), or register() function", stderr.getvalue())
+            self.assertIn("Fix: Create a ModuleBase subclass", stderr.getvalue())
+            self.assertIn("Docs: https://github.com/hairpin01/CubKit/blob/main/doc/rules-lint.md#mcub-entrypoint", stderr.getvalue())
+            self.assertIn("MCUB: https://github.com/hairpin01/MCUB-fork/blob/main/doc/registration/class-style.md#quick-start", stderr.getvalue())
 
     def test_lint_accepts_modulebase_and_register_entrypoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -248,6 +251,22 @@ strict_imports = true
             self.assertIn("mcub-decorator", stderr.getvalue())
             self.assertIn("mcub-command-conflict", stderr.getvalue())
 
+    def test_lint_accepts_localized_command_documentation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """class Demo(ModuleBase):
+    @command("ping", doc_ru="Описание")
+    async def ping(self, event):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("command-without-docs", stderr.getvalue())
+
     def test_lint_checks_locale_accesses_and_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(Path(tmp))
@@ -365,6 +384,100 @@ async def main():
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(["lint", str(project)]), 0)
             self.assertIn("blocking-io", stderr.getvalue())
+
+    def test_reproducible_build_is_byte_identical_and_has_manifest_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            first = build_project(project, reproducible=True)
+            first_bytes = first.read_bytes()
+            second = build_project(project, reproducible=True)
+            self.assertEqual(first_bytes, second.read_bytes())
+            self.assertIn(b"# CubKit reproducible build: true", first_bytes)
+            self.assertIn(b"# CubKit manifest sha256: ", first_bytes)
+
+    def test_lint_async_lifecycle_and_secret_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """import asyncio
+
+TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"
+
+class Demo(ModuleBase):
+    async def start(self, event):
+        event.respond("hello")
+        self.task = asyncio.create_task(self.worker())
+
+    async def worker(self):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("missing-await", output)
+            self.assertIn("missing-cleanup", output)
+            self.assertIn("hardcoded-token", output)
+
+    def test_lint_command_docs_dynamic_locales_and_assets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            manifest = project / "cubkit.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    'entrypoint = "main.py"', 'entrypoint = "main.py"\nassets = "assets"\nlocales = "locales"'
+                ),
+                encoding="utf-8",
+            )
+            (project / "assets").mkdir()
+            (project / "locales").mkdir()
+            (project / "locales/en.yaml").write_text("unused: text\n", encoding="utf-8")
+            (project / "src/main.py").write_text(
+                """class Demo(ModuleBase):
+    @command("ping")
+    async def ping(self, event):
+        self.strings(event.raw_text)
+        resource("missing.txt")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("command-without-docs", output)
+            self.assertIn("locale-dynamic-key", output)
+            self.assertIn("locale-unused-key", output)
+            self.assertIn("asset-missing", output)
+
+    def test_lint_dependency_version_and_deprecated_mcub_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            manifest = project / "cubkit.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    'id = "feature_mod"', 'id = "feature_mod"\nrequires = ["demo-package>=9"]'
+                ),
+                encoding="utf-8",
+            )
+            (project / "src/main.py").write_text(
+                """def register(client):
+    with open(kernel.CONFIG_FILE) as stream:
+        pass
+    return ConfigValue("enabled", False, validator=Boolean(default=False))
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with patch("cubkit.linter.importlib.metadata.version", return_value="1.0"), contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("dependency-version-mismatch", output)
+            self.assertIn("deprecated-register-client", output)
+            self.assertIn("deprecated-config-file", output)
+            self.assertIn("redundant-validator-default", output)
 
     def test_build_quiet_prints_only_relative_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -60,6 +60,7 @@ def build_project(
     hook_output: Callable[[str], None] | None = None,
     lint_output: LintOutput | None = None,
     lint_progress: LintProgress | None = None,
+    reproducible: bool = False,
 ) -> Path:
     """Build *project_dir* and return the generated artifact path."""
 
@@ -104,7 +105,11 @@ def build_project(
     payload = build_zip_payload(files)
     if status is not None:
         status("rendering artifact")
-    rendered = render_module(manifest, payload, bundle_files=files)
+    rendered = render_module(manifest, payload, bundle_files=files, reproducible=reproducible)
+    if reproducible and rendered != render_module(
+        manifest, payload, bundle_files=files, reproducible=True
+    ):
+        raise BuildError("reproducible build verification failed")
 
     if output is not None:
         output_path = output.resolve()
@@ -131,4 +136,7 @@ def _report_lint_issues(issues: list[LintIssue], output: LintOutput | None) -> N
         return
     for issue in issues:
         path = issue.path.as_posix() if issue.path is not None else "main.py"
-        output(f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}\n")
+        links = f"  Fix: {issue.suggestion}\n  Docs: {issue.docs_url}\n"
+        if issue.mcub_docs_url is not None:
+            links += f"  MCUB: {issue.mcub_docs_url}\n"
+        output(f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}\n{links}")

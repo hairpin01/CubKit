@@ -65,6 +65,7 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
+    build_parser.add_argument("--reproducible", action="store_true", help="verify deterministic output and embed manifest hash")
     _add_profile_arguments(build_parser)
     _add_output_arguments(build_parser, quiet=True)
     build_parser.set_defaults(func=_cmd_build)
@@ -160,6 +161,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
             hook_output=reporter.capture_output,
             lint_output=reporter.capture_output,
             lint_progress=reporter.progress,
+            reproducible=args.reproducible,
         )
     finally:
         reporter.finish()
@@ -198,6 +200,10 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         path = _display_path(manifest.entrypoint, manifest.project_dir, args.absolute_paths)
         for issue in issues:
             print(f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}", file=sys.stderr)
+            print(f"  Fix: {issue.suggestion}", file=sys.stderr)
+            print(f"  Docs: {issue.docs_url}", file=sys.stderr)
+            if issue.mcub_docs_url is not None:
+                print(f"  MCUB: {issue.mcub_docs_url}", file=sys.stderr)
         print(f"lint: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)", file=sys.stderr)
     return 1 if errors else 0
 

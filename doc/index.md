@@ -263,6 +263,17 @@ cubkit lint . --format json
 absolute. `build --quiet` prints only its output path. Text output intentionally
 uses ASCII status markers (`OK`, `ERROR`) with one small completion emoji.
 
+### Reproducible builds
+
+```bash
+cubkit build . --reproducible
+```
+
+The reproducible mode writes stable zip metadata, orders bundled files, renders
+the artifact twice to verify deterministic rendering, and embeds the SHA-256 of
+the active manifest. The same source files and manifest bytes produce a
+byte-identical `.py` artifact.
+
 Assets and locale directories are always resolved from the project root, not
 from `src`.
 

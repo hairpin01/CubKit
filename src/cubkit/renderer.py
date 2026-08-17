@@ -13,7 +13,7 @@ from typing import Sequence
 
 from .collector import BundleFile
 from .localization import load_locales
-from .manifest import Manifest
+from .manifest import Manifest, find_manifest
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,11 @@ class EntrypointMetadata:
 
 
 def render_module(
-    manifest: Manifest, payload: bytes, *, bundle_files: Sequence[BundleFile] = ()
+    manifest: Manifest,
+    payload: bytes,
+    *,
+    bundle_files: Sequence[BundleFile] = (),
+    reproducible: bool = False,
 ) -> str:
     """Render a generated module from *manifest* and embedded *payload*."""
 
@@ -77,6 +81,7 @@ def render_module(
         source_hash=source_hash,
         signature=signature,
         entrypoint_line=0,
+        reproducible=reproducible,
     )
     prefix = f"{metadata}\n{build_info}{future_block}{bootstrap}\n\n# ---- CubKit entrypoint: {manifest.entrypoint.name} ----\n"
     entrypoint_line = prefix.count("\n") + 1
@@ -87,6 +92,7 @@ def render_module(
         source_hash=source_hash,
         signature=signature,
         entrypoint_line=entrypoint_line,
+        reproducible=reproducible,
     )
     prefix = f"{metadata}\n{build_info}{future_block}{bootstrap}\n\n# ---- CubKit entrypoint: {manifest.entrypoint.name} ----\n"
     return f"{prefix}{entrypoint_source}\n"
@@ -127,6 +133,7 @@ def _render_build_info(
     source_hash: str,
     signature: str | None,
     entrypoint_line: int,
+    reproducible: bool,
 ) -> str:
     lines = [
         "# CubKit build info:",
@@ -137,6 +144,15 @@ def _render_build_info(
         lines.append(f"# CubKit signature: {signature}")
         lines.append(
             "# CubKit signature algorithm: sha256(cubkit-sign-v1 + module id + source sha256 + payload sha256)"
+        )
+    if reproducible:
+        manifest_path = find_manifest(manifest.project_dir)
+        manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+        lines.extend(
+            [
+                "# CubKit reproducible build: true",
+                f"# CubKit manifest sha256: {manifest_hash}",
+            ]
         )
     lines.extend(
         [

@@ -109,6 +109,9 @@ token. Use `cubkit lint` to check that the entrypoint has an MCUB `ModuleBase`/
 External-import validation and automatic pre-build linting are configured with
 `[lint]`; see the full documentation for examples.
 
+For a byte-identical artifact from unchanged inputs, use `cubkit build
+--reproducible`. It embeds the SHA-256 of the manifest in the generated file.
+
 Legacy flat manifests remain supported. Convert one with:
 
 ```bash
