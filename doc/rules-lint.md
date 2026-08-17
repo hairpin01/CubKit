@@ -122,3 +122,75 @@ Replace direct reads and writes of `kernel.CONFIG_FILE` with `kernel.config`,
 
 Keep the default as the second `ConfigValue` argument. Do not repeat it in
 validators such as `Boolean(default=False)`.
+
+## callbackquery-requires-bot-client
+
+MCUB callback-query events are routed through the bot client and therefore
+require `bot_client=True`.
+
+## invalid-event-type
+
+The literal passed to `@register.event(...)` must be one of MCUB's documented
+event names or aliases.
+
+## conflicting-watcher-filters
+
+Do not combine contradictory watcher filters such as `only_pm=True` and
+`no_pm=True`.
+
+## unfiltered-watcher
+
+An unfiltered watcher executes for every message. Add filters before performing
+network, subprocess, or file I/O.
+
+## invalid-lifecycle-signature
+
+Function-style lifecycle callbacks are async and receive `kernel`; class-style
+lifecycle methods are async and receive `self` plus their documented arguments.
+
+## legacy-inline-form
+
+Use `kernel.inline.form(...)`; `kernel.inline_form(...)` is the old spelling.
+
+## module-config-schema-missing
+
+Function-style `ModuleConfig` must be exposed with
+`kernel.store_module_config_schema(__name__, config)` for the config UI.
+
+## class-config-super-missing
+
+Class-style modules get config setup from `ModuleBase.on_load`. An override must
+call `await super().on_load()`. A class without an override inherits it and is
+valid without a manual schema registration call.
+
+## config-default-invalid
+
+A `ConfigValue` default must satisfy its Boolean, Integer, or Choice validator.
+
+## duplicate-config-key
+
+Every key inside one `ModuleConfig` must be unique.
+
+## missing-handler-types
+
+Annotate MCUB event parameters with `Event` from `core.lib.types` for editor and
+type-checker support.
+
+## inline-scope-missing
+
+Modules using inline, callback, temporary inline, or rich-form APIs should set
+`scope = "inline"` in `[module]`.
+
+## invalid-loop-interval
+
+Literal loop intervals must be greater than zero seconds.
+
+## manual-handler-registration
+
+Prefer MCUB `register.event`/`watcher` over direct `client.add_event_handler` so
+handlers are tracked and removed automatically during unload.
+
+## rich-media-id-mismatch
+
+Every `tg://media`, `tg://photo`, `tg://video`, `tg://audio`, or
+`tg://document` id in literal rich HTML must exist in the `rich_media` mapping.

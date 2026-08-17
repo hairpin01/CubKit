@@ -25,7 +25,9 @@ class CubKitFeaturesTest(unittest.TestCase):
         project = root / "module"
         source = project / "src"
         source.mkdir(parents=True)
-        (source / "main.py").write_text("def register(kernel):\n    return kernel\n", encoding="utf-8")
+        (source / "main.py").write_text(
+            "def register(kernel):\n    return kernel\n", encoding="utf-8"
+        )
         (project / "cubkit.toml").write_text(
             """format = 2
 
@@ -42,13 +44,23 @@ entrypoint = "main.py"
 
     def test_profile_selects_configured_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = self._project(Path(tmp), 'debug_output = "dist/debug.py"\nrelease_output = "release/module.py"\n')
-            self.assertEqual(build_project(project, profile="debug"), project / "dist/debug.py")
-            self.assertEqual(build_project(project, profile="release"), project / "release/module.py")
+            project = self._project(
+                Path(tmp),
+                'debug_output = "dist/debug.py"\nrelease_output = "release/module.py"\n',
+            )
+            self.assertEqual(
+                build_project(project, profile="debug"), project / "dist/debug.py"
+            )
+            self.assertEqual(
+                build_project(project, profile="release"), project / "release/module.py"
+            )
 
     def test_include_and_exclude_patterns_control_embedded_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = self._project(Path(tmp), 'include = ["resources/**/*.json"]\nexclude = ["resources/private.json"]\n')
+            project = self._project(
+                Path(tmp),
+                'include = ["resources/**/*.json"]\nexclude = ["resources/private.json"]\n',
+            )
             resources = project / "resources"
             resources.mkdir()
             (resources / "public.json").write_text("{}", encoding="utf-8")
@@ -60,7 +72,10 @@ entrypoint = "main.py"
 
     def test_secret_check_rejects_suspicious_token(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = self._project(Path(tmp), 'include = ["resources/config.txt"]\nfail_on_secrets = true\n')
+            project = self._project(
+                Path(tmp),
+                'include = ["resources/config.txt"]\nfail_on_secrets = true\n',
+            )
             (project / "resources").mkdir()
             (project / "resources/config.txt").write_text(
                 'api_key = "abcdefghijklmnopqrstuvwxyz123456"\n', encoding="utf-8"
@@ -83,10 +98,12 @@ post_build = ["python", "scripts/release.py"]
             scripts = project / "scripts"
             scripts.mkdir()
             (scripts / "common.py").write_text(
-                'from pathlib import Path\nPath("common-ran").touch()\n', encoding="utf-8"
+                'from pathlib import Path\nPath("common-ran").touch()\n',
+                encoding="utf-8",
             )
             (scripts / "release.py").write_text(
-                'from pathlib import Path\nPath("release-ran").touch()\n', encoding="utf-8"
+                'from pathlib import Path\nPath("release-ran").touch()\n',
+                encoding="utf-8",
             )
             build_project(project, profile="debug")
             self.assertTrue((project / "common-ran").is_file())
@@ -105,7 +122,9 @@ pre_build = ["python", "scripts/output.py"]
             )
             scripts = project / "scripts"
             scripts.mkdir()
-            (scripts / "output.py").write_text('print("hook output")\n', encoding="utf-8")
+            (scripts / "output.py").write_text(
+                'print("hook output")\n', encoding="utf-8"
+            )
             stdout = io.StringIO()
             stderr = io.StringIO()
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
@@ -113,7 +132,9 @@ pre_build = ["python", "scripts/output.py"]
             output = stderr.getvalue()
             self.assertIn("pre_build: python scripts/output.py", output)
             self.assertIn("hook output", output)
-            self.assertGreater(output.index("hook output"), output.index("writing artifact"))
+            self.assertGreater(
+                output.index("hook output"), output.index("writing artifact")
+            )
 
     def test_lint_reports_missing_mcub_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,14 +145,22 @@ pre_build = ["python", "scripts/output.py"]
                 self.assertEqual(main(["lint", str(project)]), 1)
             self.assertIn("main(), or register() function", stderr.getvalue())
             self.assertIn("Fix: Create a ModuleBase subclass", stderr.getvalue())
-            self.assertIn("Docs: https://github.com/hairpin01/CubKit/blob/main/doc/rules-lint.md#mcub-entrypoint", stderr.getvalue())
-            self.assertIn("MCUB: https://github.com/hairpin01/MCUB-fork/blob/main/doc/registration/class-style.md#quick-start", stderr.getvalue())
+            self.assertIn(
+                "Docs: https://github.com/hairpin01/CubKit/blob/main/doc/rules-lint.md#mcub-entrypoint",
+                stderr.getvalue(),
+            )
+            self.assertIn(
+                "MCUB: https://github.com/hairpin01/MCUB-fork/blob/main/doc/registration/class-style.md#quick-start",
+                stderr.getvalue(),
+            )
 
     def test_lint_accepts_modulebase_and_register_entrypoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(Path(tmp))
             self.assertEqual(main(["lint", str(project)]), 0)
-            (project / "src/main.py").write_text("def main():\n    pass\n", encoding="utf-8")
+            (project / "src/main.py").write_text(
+                "def main():\n    pass\n", encoding="utf-8"
+            )
             self.assertEqual(main(["lint", str(project)]), 0)
             (project / "src/main.py").write_text(
                 "class Sample(ModuleBase):\n    pass\n", encoding="utf-8"
@@ -150,7 +179,9 @@ pre_build = ["python", "scripts/output.py"]
                 self.assertEqual(main(["lint", str(project), "--check-imports"]), 0)
             self.assertIn("WARNING", stderr.getvalue())
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(main(["lint", str(project), "--check-imports", "--strict"]), 1)
+                self.assertEqual(
+                    main(["lint", str(project), "--check-imports", "--strict"]), 1
+                )
 
     def test_import_lint_allows_mcub_and_declared_dependencies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -179,7 +210,9 @@ yaml = "PyYAML"
 
     def test_import_lint_allows_cubkit_vendored_libraries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            project = self._project(Path(tmp), "[lint]\ncheck_imports = true\nstrict_imports = true\n")
+            project = self._project(
+                Path(tmp), "[lint]\ncheck_imports = true\nstrict_imports = true\n"
+            )
             (project / "src/main.py").write_text(
                 "import cubkit.libs.telethon\nfrom cubkit.lib import aiohttp\n\ndef main():\n    pass\n",
                 encoding="utf-8",
@@ -190,11 +223,12 @@ yaml = "PyYAML"
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(
                 Path(tmp),
-                "[lint]\ncheck_imports = true\nstrict_imports = true\nruntime_modules = ["\
+                "[lint]\ncheck_imports = true\nstrict_imports = true\nruntime_modules = ["
                 '"openagent_system_tool_api"]\n',
             )
             (project / "src/main.py").write_text(
-                "import openagent_system_tool_api\n\ndef main():\n    pass\n", encoding="utf-8"
+                "import openagent_system_tool_api\n\ndef main():\n    pass\n",
+                encoding="utf-8",
             )
             self.assertEqual(main(["lint", str(project)]), 0)
 
@@ -225,7 +259,12 @@ strict_imports = true
             project = self._project(Path(tmp))
             (project / "src/extra.py").write_text("VALUE = 1\n", encoding="utf-8")
             steps: list[tuple[str, int, int]] = []
-            lint_project(load_manifest(project), progress=lambda label, index, total: steps.append((label, index, total)))
+            lint_project(
+                load_manifest(project),
+                progress=lambda label, index, total: steps.append(
+                    (label, index, total)
+                ),
+            )
             self.assertEqual([step[1] for step in steps], [1, 2])
             self.assertTrue(all(step[2] == 2 for step in steps))
             self.assertTrue(all(step[0].startswith("linting src/") for step in steps))
@@ -273,14 +312,19 @@ strict_imports = true
             manifest = project / "cubkit.toml"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    'entrypoint = "main.py"', 'entrypoint = "main.py"\nlocales = "locales"'
+                    'entrypoint = "main.py"',
+                    'entrypoint = "main.py"\nlocales = "locales"',
                 ),
                 encoding="utf-8",
             )
             locales = project / "locales"
             locales.mkdir()
-            (locales / "en.yaml").write_text("welcome: 'Hello {name}'\n", encoding="utf-8")
-            (locales / "ru.yaml").write_text("welcome: 'Привет {username}'\n", encoding="utf-8")
+            (locales / "en.yaml").write_text(
+                "welcome: 'Hello {name}'\n", encoding="utf-8"
+            )
+            (locales / "ru.yaml").write_text(
+                "welcome: 'Привет {username}'\n", encoding="utf-8"
+            )
             (project / "src/main.py").write_text(
                 """class Demo(ModuleBase):
     async def main(self, event):
@@ -326,7 +370,10 @@ pre_build = ["python", "scripts/{unknown}.py"]
                 "[lint]\nstrict_tools = true\n\n[lint.tools]\nruff = true\n",
             )
             stderr = io.StringIO()
-            with patch("cubkit.linter.shutil.which", return_value=None), contextlib.redirect_stderr(stderr):
+            with (
+                patch("cubkit.linter.shutil.which", return_value=None),
+                contextlib.redirect_stderr(stderr),
+            ):
                 self.assertEqual(main(["lint", str(project)]), 1)
             self.assertIn("tool-missing", stderr.getvalue())
 
@@ -357,11 +404,14 @@ mypy = true
             manifest = project / "cubkit.toml"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    'id = "feature_mod"', 'id = "feature_mod"\nrequires = ["aiohttp", "unused-package"]'
+                    'id = "feature_mod"',
+                    'id = "feature_mod"\nrequires = ["aiohttp", "unused-package"]',
                 ),
                 encoding="utf-8",
             )
-            (project / "src/main.py").write_text("import aiohttp\n\ndef main():\n    pass\n", encoding="utf-8")
+            (project / "src/main.py").write_text(
+                "import aiohttp\n\ndef main():\n    pass\n", encoding="utf-8"
+            )
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(["lint", str(project)]), 0)
@@ -427,7 +477,8 @@ class Demo(ModuleBase):
             manifest = project / "cubkit.toml"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    'entrypoint = "main.py"', 'entrypoint = "main.py"\nassets = "assets"\nlocales = "locales"'
+                    'entrypoint = "main.py"',
+                    'entrypoint = "main.py"\nassets = "assets"\nlocales = "locales"',
                 ),
                 encoding="utf-8",
             )
@@ -458,7 +509,8 @@ class Demo(ModuleBase):
             manifest = project / "cubkit.toml"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    'id = "feature_mod"', 'id = "feature_mod"\nrequires = ["demo-package>=9"]'
+                    'id = "feature_mod"',
+                    'id = "feature_mod"\nrequires = ["demo-package>=9"]',
                 ),
                 encoding="utf-8",
             )
@@ -471,13 +523,228 @@ class Demo(ModuleBase):
                 encoding="utf-8",
             )
             stderr = io.StringIO()
-            with patch("cubkit.linter.importlib.metadata.version", return_value="1.0"), contextlib.redirect_stderr(stderr):
+            with (
+                patch("cubkit.linter.importlib.metadata.version", return_value="1.0"),
+                contextlib.redirect_stderr(stderr),
+            ):
                 self.assertEqual(main(["lint", str(project)]), 1)
             output = stderr.getvalue()
             self.assertIn("dependency-version-mismatch", output)
             self.assertIn("deprecated-register-client", output)
             self.assertIn("deprecated-config-file", output)
             self.assertIn("redundant-validator-default", output)
+
+    def test_lint_function_style_commands_and_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """def register(kernel):
+    @kernel.register.command("ping", doc_ru="Пинг")
+    async def first(event):
+        pass
+
+    @kernel.register.command("ping", doc_en="Ping")
+    async def second(event):
+        pass
+
+    @kernel.register.on_load()
+    def setup(client):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("mcub-command-conflict", output)
+            self.assertIn("invalid-lifecycle-signature", output)
+            self.assertIn("missing-handler-types", output)
+
+    def test_lint_event_watcher_loop_and_inline_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """def register(kernel):
+    @kernel.register.event("callbackquery")
+    async def callback(event):
+        pass
+
+    @kernel.register.event("unknown", bot_client=True)
+    async def unknown(event):
+        pass
+
+    @kernel.register.watcher(only_pm=True, no_pm=True)
+    async def watcher(event):
+        pass
+
+    @kernel.register.loop(interval=0)
+    async def loop(kernel):
+        pass
+
+    kernel.client.add_event_handler(callback)
+    kernel.inline_form(1, "text")
+    kernel.rich_form(1, '<a href="tg://photo?id=hero">x</a>', rich_media={"other": object()})
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            for code in (
+                "callbackquery-requires-bot-client",
+                "invalid-event-type",
+                "conflicting-watcher-filters",
+                "invalid-loop-interval",
+                "manual-handler-registration",
+                "legacy-inline-form",
+                "rich-media-id-mismatch",
+                "inline-scope-missing",
+            ):
+                self.assertIn(code, output)
+
+    def test_lint_module_config_rules_and_class_super(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """class Demo(ModuleBase):
+    config = ModuleConfig(
+        ConfigValue("enabled", "yes", validator=Boolean()),
+        ConfigValue("enabled", False, validator=Boolean()),
+    )
+
+    async def on_load(self):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("duplicate-config-key", output)
+            self.assertIn("config-default-invalid", output)
+            self.assertIn("class-config-super-missing", output)
+            self.assertNotIn("module-config-schema-missing", output)
+
+    def test_lint_accepts_class_config_with_super_on_load(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """class Demo(ModuleBase):
+    config = ModuleConfig(ConfigValue("enabled", False, validator=Boolean()))
+
+    async def on_load(self):
+        await super().on_load()
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("class-config-super-missing", stderr.getvalue())
+
+    def test_lint_uses_builtin_mcub_dependency_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            manifest = project / "cubkit.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    'id = "feature_mod"', 'id = "feature_mod"\nrequires = ["PyYAML"]'
+                ),
+                encoding="utf-8",
+            )
+            (project / "src/main.py").write_text(
+                "import yaml\n\ndef main():\n    pass\n", encoding="utf-8"
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("unused-require", stderr.getvalue())
+
+    def test_lint_accepts_chataction_and_ignores_click_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """def register(kernel):
+    @kernel.register.event("chataction")
+    async def action(event: Event):
+        pass
+
+@click.command()
+def cli():
+    pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("invalid-event-type", stderr.getvalue())
+            self.assertNotIn("mcub-command", stderr.getvalue())
+
+    def test_lint_rejects_empty_command_and_wrong_event_type_annotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """def register(kernel):
+    @kernel.register.command("", alias=["ping"], doc_en="Ping")
+    async def ping(event: str):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            self.assertIn("mcub-command", stderr.getvalue())
+            self.assertIn("missing-handler-types", stderr.getvalue())
+
+    def test_lint_handles_bad_integer_bounds_and_asset_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            manifest = project / "cubkit.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    'entrypoint = "main.py"',
+                    'entrypoint = "main.py"\nassets = "assets"',
+                ),
+                encoding="utf-8",
+            )
+            (project / "assets").mkdir()
+            (project / "src/main.py").write_text(
+                """def main():
+    config = ModuleConfig(ConfigValue("count", 1, validator=Integer(min="0")))
+    resource("../../outside.txt")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            self.assertIn("asset-missing", stderr.getvalue())
+
+    def test_lint_inline_form_scope_and_watcher_io_precision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """def register(kernel):
+    @kernel.register.watcher(out=True, incoming=True)
+    async def watcher(event: Event):
+        event.data.get("key")
+
+    kernel.inline.form(1, "text")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("conflicting-watcher-filters", output)
+            self.assertIn("inline-scope-missing", output)
+            self.assertNotIn("unfiltered-watcher", output)
 
     def test_build_quiet_prints_only_relative_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
