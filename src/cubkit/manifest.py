@@ -50,6 +50,48 @@ class Hooks:
 
 
 @dataclass(frozen=True)
+class LintTools:
+    ruff: bool = False
+    black: bool = False
+    mypy: bool = False
+    profiles: dict[str, "LintToolProfile"] | None = None
+
+    def for_profile(self, profile: str | None) -> "LintTools":
+        if profile is None or self.profiles is None or profile not in self.profiles:
+            return self
+        override = self.profiles[profile]
+        return LintTools(
+            ruff=self.ruff if override.ruff is None else override.ruff,
+            black=self.black if override.black is None else override.black,
+            mypy=self.mypy if override.mypy is None else override.mypy,
+        )
+
+
+@dataclass(frozen=True)
+class LintToolProfile:
+    ruff: bool | None = None
+    black: bool | None = None
+    mypy: bool | None = None
+
+
+@dataclass(frozen=True)
+class LintConfig:
+    """Optional static-analysis settings for a CubKit project."""
+
+    auto: bool = False
+    check_imports: bool = False
+    strict_imports: bool = False
+    mcub_modules: tuple[str, ...] = ("core", "utils", "telethon", "loader")
+    runtime_modules: tuple[str, ...] = ()
+    import_aliases: dict[str, str] | None = None
+    enable: tuple[str, ...] = ()
+    disable: tuple[str, ...] = ()
+    ignore: tuple[str, ...] = ()
+    tools: LintTools = LintTools()
+    strict_tools: bool = False
+
+
+@dataclass(frozen=True)
 class Manifest:
     """CubKit module manifest."""
 
@@ -78,6 +120,7 @@ class Manifest:
     exclude: tuple[str, ...] = ()
     fail_on_secrets: bool = False
     hooks: Hooks | None = None
+    lint: LintConfig = LintConfig()
 
 
 def find_manifest(project_dir: Path) -> Path:
@@ -127,6 +170,7 @@ def load_manifest(project_dir: Path) -> Manifest:
     exclude = _optional_str_tuple(data, "exclude")
     fail_on_secrets = _optional_bool(data, "fail_on_secrets", default=False)
     hooks = _optional_hooks(data.get("hooks"))
+    lint = _optional_lint_config(data.get("lint"))
 
     if not MODULE_ID_RE.fullmatch(module_id):
         raise ManifestError("id must match /^[a-z][a-z0-9_]{1,31}$/")
@@ -180,6 +224,7 @@ def load_manifest(project_dir: Path) -> Manifest:
         exclude=exclude,
         fail_on_secrets=fail_on_secrets,
         hooks=hooks,
+        lint=lint,
     )
 
 
@@ -199,7 +244,7 @@ def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object]
         raise ManifestError(
             "format 2 cannot mix legacy root fields: " + ", ".join(mixed)
         )
-    unknown_root = sorted(set(data) - {"format", "module", "bundle", "libs", "hooks"})
+    unknown_root = sorted(set(data) - {"format", "module", "bundle", "libs", "hooks", "lint"})
     if unknown_root:
         raise ManifestError("unknown format 2 fields: " + ", ".join(unknown_root))
 
@@ -232,6 +277,8 @@ def _normalize_manifest_data(data: dict[str, object]) -> tuple[dict[str, object]
         normalized["libs"] = data["libs"]
     if "hooks" in data:
         normalized["hooks"] = data["hooks"]
+    if "lint" in data:
+        normalized["lint"] = data["lint"]
     return normalized, 2
 
 
@@ -317,6 +364,72 @@ def _optional_hooks(value: object) -> Hooks | None:
         else:
             raise ManifestError(f"unknown [hooks] field: {name}")
     return Hooks(common=common, profiles=profiles)
+
+
+def _optional_lint_config(value: object) -> LintConfig:
+    if value is None:
+        return LintConfig()
+    if not isinstance(value, dict):
+        raise ManifestError("'lint' must be a table")
+    allowed = {"auto", "check_imports", "strict_imports", "mcub_modules", "runtime_modules", "import_aliases", "enable", "disable", "ignore", "tools", "strict_tools"}
+    _reject_unknown_table_fields(value, allowed, "lint")
+    auto = _optional_bool(value, "auto", default=False)
+    check_imports = _optional_bool(value, "check_imports", default=False)
+    strict_imports = _optional_bool(value, "strict_imports", default=False)
+    mcub_modules = _optional_str_tuple(value, "mcub_modules") or LintConfig.mcub_modules
+    runtime_modules = _optional_str_tuple(value, "runtime_modules")
+    aliases_value = value.get("import_aliases")
+    aliases: dict[str, str] | None = None
+    if aliases_value is not None:
+        if not isinstance(aliases_value, dict):
+            raise ManifestError("'lint.import_aliases' must be a table")
+        aliases = {}
+        for import_name, distribution in aliases_value.items():
+            if not isinstance(import_name, str) or not isinstance(distribution, str):
+                raise ManifestError("'lint.import_aliases' must map strings to strings")
+            aliases[import_name] = distribution
+    enable = _optional_str_tuple(value, "enable")
+    disable = _optional_str_tuple(value, "disable")
+    ignore = _optional_str_tuple(value, "ignore")
+    tools = _optional_lint_tools(value.get("tools"))
+    strict_tools = _optional_bool(value, "strict_tools", default=False)
+    return LintConfig(auto, check_imports, strict_imports, mcub_modules, runtime_modules, aliases, enable, disable, ignore, tools, strict_tools)
+
+
+def _optional_lint_tools(value: object) -> LintTools:
+    if value is None:
+        return LintTools()
+    if not isinstance(value, dict):
+        raise ManifestError("'lint.tools' must be a table")
+    _reject_unknown_table_fields(value, {"ruff", "black", "mypy", "debug", "release"}, "lint.tools")
+    profiles: dict[str, LintToolProfile] = {}
+    for profile in ("debug", "release"):
+        profile_value = value.get(profile)
+        if profile_value is None:
+            continue
+        if not isinstance(profile_value, dict):
+            raise ManifestError(f"'lint.tools.{profile}' must be a table")
+        _reject_unknown_table_fields(profile_value, {"ruff", "black", "mypy"}, f"lint.tools.{profile}")
+        profiles[profile] = LintToolProfile(
+            ruff=_optional_nullable_bool(profile_value, "ruff"),
+            black=_optional_nullable_bool(profile_value, "black"),
+            mypy=_optional_nullable_bool(profile_value, "mypy"),
+        )
+    return LintTools(
+        ruff=_optional_bool(value, "ruff", default=False),
+        black=_optional_bool(value, "black", default=False),
+        mypy=_optional_bool(value, "mypy", default=False),
+        profiles=profiles or None,
+    )
+
+
+def _optional_nullable_bool(data: dict[str, object], key: str) -> bool | None:
+    if key not in data:
+        return None
+    value = data[key]
+    if not isinstance(value, bool):
+        raise ManifestError(f"{key!r} must be a boolean")
+    return value
 
 
 def _parse_hook_events(

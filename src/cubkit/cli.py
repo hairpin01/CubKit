@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import threading
 from pathlib import Path
@@ -15,7 +16,7 @@ from .builder import build_project, check_project
 from .errors import CubKitError
 from .migration import migrate_manifest
 from .manifest import load_manifest
-from .linter import lint_entrypoint
+from .linter import lint_project
 from .types_sync import sync_mcub_types
 
 
@@ -27,7 +28,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except CubKitError as exc:
-        print(f"cubkit: error: {exc}", file=sys.stderr)
+        if getattr(args, "output_format", "text") == "json":
+            print(json.dumps({"ok": False, "error": str(exc)}))
+        else:
+            print(f"ERROR {exc}", file=sys.stderr)
         return 1
 
 
@@ -45,6 +49,7 @@ def _make_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--id", dest="module_id", help="module id; defaults to the directory name"
     )
+    init_parser.add_argument("--force", action="store_true", help="replace existing starter files")
     init_parser.set_defaults(func=_cmd_init)
 
     check_parser = subparsers.add_parser(
@@ -52,7 +57,7 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     check_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     _add_profile_arguments(check_parser)
-    check_parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
+    _add_output_arguments(check_parser, quiet=False)
     check_parser.set_defaults(func=_cmd_check)
 
     build_parser = subparsers.add_parser(
@@ -61,11 +66,16 @@ def _make_parser() -> argparse.ArgumentParser:
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
     _add_profile_arguments(build_parser)
-    build_parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
+    _add_output_arguments(build_parser, quiet=True)
     build_parser.set_defaults(func=_cmd_build)
 
     lint_parser = subparsers.add_parser("lint", help="check an MCUB module entrypoint")
     lint_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    _add_profile_arguments(lint_parser)
+    _add_output_arguments(lint_parser, quiet=False)
+    lint_parser.add_argument("--check-imports", action="store_true", help="validate non-local imports")
+    lint_parser.add_argument("--strict", action="store_true", help="treat import warnings as errors")
+    lint_parser.add_argument("--fix", action="store_true", help="apply supported external tool fixes")
     lint_parser.set_defaults(func=_cmd_lint)
 
     types_parser = subparsers.add_parser(
@@ -88,6 +98,14 @@ def _add_profile_arguments(parser: argparse.ArgumentParser) -> None:
     profiles.add_argument("--release", action="store_const", const="release", dest="profile", help="use release output and hooks")
 
 
+def _add_output_arguments(parser: argparse.ArgumentParser, *, quiet: bool) -> None:
+    parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
+    parser.add_argument("--format", choices=("text", "json"), dest="output_format", default="text", help="output format")
+    parser.add_argument("--absolute-paths", action="store_true", help="show absolute paths")
+    if quiet:
+        parser.add_argument("--quiet", action="store_true", help="print only the output path")
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     project_dir = args.path.resolve()
     module_id = args.module_id or _normalize_module_id(project_dir.name)
@@ -97,29 +115,39 @@ def _cmd_init(args: argparse.Namespace) -> int:
     (source_dir / package_name).mkdir(parents=True, exist_ok=True)
     (project_dir / "assets").mkdir(exist_ok=True)
 
-    _write_new(
+    written = _write_new(
         project_dir / "cubkit.toml",
         _manifest_template(module_id, project_dir.name, package_name),
+        force=args.force,
     )
-    _write_new(source_dir / "main.py", _entrypoint_template(package_name))
-    _write_new(
+    written += _write_new(source_dir / "main.py", _entrypoint_template(package_name), force=args.force)
+    written += _write_new(
         source_dir / package_name / "__init__.py",
         '"""Private package for this MCUB module."""\n',
+        force=args.force,
     )
-    _write_new(source_dir / package_name / "utils.py", _utils_template())
-    print(f"created CubKit module project: {project_dir}")
+    written += _write_new(source_dir / package_name / "utils.py", _utils_template(), force=args.force)
+    print(f"OK {len(written)} starter file(s) in {project_dir}")
     return 0
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    count = check_project(args.path, profile=args.profile, run_configured_hooks=not args.skip_hooks)
-    print(f"ok: {args.path} ({count} embedded file(s))")
+    reporter = _ProgressReporter(args.path.resolve(), enabled=args.output_format == "text")
+    try:
+        count = check_project(args.path, profile=args.profile, run_configured_hooks=not args.skip_hooks, status=reporter.status, hook_output=reporter.capture_output)
+    finally:
+        reporter.finish()
+    path = _display_path(args.path.resolve(), args.path.resolve(), args.absolute_paths)
+    if args.output_format == "json":
+        print(json.dumps({"ok": True, "path": str(args.path.resolve()), "embedded_files": count}))
+    else:
+        print(f"OK {path} ({count} embedded file(s))")
     return 0
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
     project_dir = args.path.resolve()
-    reporter = _ProgressReporter(project_dir)
+    reporter = _ProgressReporter(project_dir, enabled=args.output_format == "text" and not args.quiet)
     try:
         output = build_project(
             project_dir,
@@ -129,23 +157,49 @@ def _cmd_build(args: argparse.Namespace) -> int:
             dependency_progress=reporter.dependency,
             profile=args.profile,
             run_configured_hooks=not args.skip_hooks,
+            hook_output=reporter.capture_output,
+            lint_output=reporter.capture_output,
+            lint_progress=reporter.progress,
         )
     finally:
         reporter.finish()
-    print(f"📐 Done! in {_format_elapsed(time.monotonic() - reporter.started)}.")
-    print(f"built: {output}")
+    displayed = _display_path(output, project_dir, args.absolute_paths)
+    elapsed = time.monotonic() - reporter.started
+    if args.output_format == "json":
+        print(json.dumps({"ok": True, "output": str(output), "profile": args.profile or "default", "duration_seconds": round(elapsed, 3)}))
+    elif args.quiet:
+        print(displayed)
+    else:
+        print(f"📐 Done! in {_format_elapsed(elapsed)}.")
+        print(f"Built {displayed}")
     return 0
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
     manifest = load_manifest(args.path)
-    issues = lint_entrypoint(manifest.entrypoint)
+    issues = lint_project(
+        manifest,
+        check_imports=True if args.check_imports or args.strict else None,
+        strict_imports=True if args.strict else None,
+        tool_output=lambda text: print(text, end="", file=sys.stderr),
+        fix=args.fix,
+        profile=args.profile,
+    )
+    errors = [issue for issue in issues if issue.severity == "error"]
     if not issues:
-        print(f"ok: {manifest.entrypoint}")
+        if args.output_format == "json":
+            print(json.dumps({"ok": True, "path": str(manifest.entrypoint), "issues": []}))
+        else:
+            print(f"OK {_display_path(manifest.entrypoint, manifest.project_dir, args.absolute_paths)}")
         return 0
-    for issue in issues:
-        print(f"{manifest.entrypoint}:{issue.line}: {issue.message}", file=sys.stderr)
-    return 1
+    if args.output_format == "json":
+        print(json.dumps({"ok": not errors, "path": str(manifest.entrypoint), "issues": [issue.__dict__ for issue in issues]}, default=str))
+    else:
+        path = _display_path(manifest.entrypoint, manifest.project_dir, args.absolute_paths)
+        for issue in issues:
+            print(f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}", file=sys.stderr)
+        print(f"lint: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)", file=sys.stderr)
+    return 1 if errors else 0
 
 
 def _cmd_types(args: argparse.Namespace) -> int:
@@ -173,16 +227,20 @@ def _cmd_migrate(args: argparse.Namespace) -> int:
 
 
 class _ProgressReporter:
-    """Small non-interactive progress printer for CubKit builds."""
+    """TTY-aware build/check progress printer that keeps stdout script-friendly."""
 
-    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    _SPINNER = "|/-\\"
     _BAR_WIDTH = 60
     _MIN_BAR_WIDTH = 8
     _REFRESH_INTERVAL = 0.1
 
-    def __init__(self, project_dir: Path) -> None:
+    _MIN_VISIBLE_SECONDS = 0.1
+
+    def __init__(self, project_dir: Path, *, enabled: bool = True) -> None:
         self.project_dir = project_dir
         self.started = time.monotonic()
+        self.enabled = enabled
+        self._interactive = enabled and sys.stderr.isatty()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._active = False
@@ -190,19 +248,39 @@ class _ProgressReporter:
         self._label = "building"
         self._index = 0
         self._total = 0
+        self._last_rendered_label: str | None = None
+        self._visible_since: float | None = None
+        self._captured_output: list[str] = []
         self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        if self._interactive:
+            self._thread.start()
 
     def ok(self, path: Path, index: int, total: int) -> None:
         with self._lock:
+            if not self.enabled:
+                return
             self._clear_line_locked()
-            sys.stdout.write(f"OK {self._display_path(path)}\n")
+            sys.stderr.write(f"OK {self._display_path(path)}\n")
             self._set_progress_locked("building", index, total)
             self._render_locked()
 
     def status(self, message: str) -> None:
         with self._lock:
+            if not self.enabled:
+                return
+            if not self._interactive and message.startswith("linting "):
+                message = "linting sources"
             self._set_progress_locked(message, 0, 0)
+            self._render_locked()
+
+    def progress(self, message: str, index: int, total: int) -> None:
+        """Render a determinate stage such as linting project source files."""
+        with self._lock:
+            if not self.enabled:
+                return
+            if not self._interactive and message.startswith("linting "):
+                message = "linting sources"
+            self._set_progress_locked(message, index, total)
             self._render_locked()
 
     def dependency(self, name: str, index: int, total: int) -> None:
@@ -211,12 +289,24 @@ class _ProgressReporter:
             self._render_locked()
 
     def finish(self) -> None:
+        if self._interactive and self._visible_since is not None:
+            remaining = self._MIN_VISIBLE_SECONDS - (time.monotonic() - self._visible_since)
+            if remaining > 0:
+                time.sleep(remaining)
         self._stop.set()
-        self._thread.join(timeout=1)
+        if self._interactive:
+            self._thread.join(timeout=1)
         with self._lock:
             self._clear_line_locked()
             self._active = False
-            sys.stdout.flush()
+            for output in self._captured_output:
+                sys.stderr.write(output.rstrip("\n") + "\n")
+            sys.stderr.flush()
+
+    def capture_output(self, output: str) -> None:
+        """Delay hook output until the progress line has been removed."""
+        with self._lock:
+            self._captured_output.append(output)
 
     def _run(self) -> None:
         while not self._stop.wait(self._REFRESH_INTERVAL):
@@ -231,14 +321,23 @@ class _ProgressReporter:
         self._active = True
 
     def _render_locked(self) -> None:
+        if not self.enabled:
+            return
+        if not self._interactive:
+            if self._label != self._last_rendered_label:
+                sys.stderr.write(f"{self._label}\n")
+                sys.stderr.flush()
+                self._last_rendered_label = self._label
+            return
         self._clear_line_locked()
-        sys.stdout.write(self._progress_line(self._label, self._index, self._total))
-        sys.stdout.flush()
+        sys.stderr.write(self._progress_line(self._label, self._index, self._total))
+        sys.stderr.flush()
         self._line_visible = True
+        self._visible_since = time.monotonic()
 
     def _clear_line_locked(self) -> None:
         if self._line_visible:
-            sys.stdout.write("\r\033[2K")
+            sys.stderr.write("\r\033[2K")
             self._line_visible = False
 
     def _display_path(self, path: Path) -> str:
@@ -309,14 +408,26 @@ def _fit_label(value: str, max_width: int) -> str:
     if len(value) <= max_width:
         return value
     if max_width == 1:
-        return "…"
-    return value[: max_width - 1] + "…"
+        return "."
+    if max_width <= 3:
+        return "." * max_width
+    return value[: max_width - 3] + "..."
 
 
-def _write_new(path: Path, content: str) -> None:
-    if path.exists():
-        return
+def _display_path(path: Path, project_dir: Path, absolute: bool) -> str:
+    if absolute:
+        return str(path.resolve())
+    try:
+        return path.resolve().relative_to(project_dir.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _write_new(path: Path, content: str, *, force: bool = False) -> list[Path]:
+    if path.exists() and not force:
+        return []
     path.write_text(content, encoding="utf-8")
+    return [path]
 
 
 def _normalize_module_id(value: str) -> str:

@@ -105,7 +105,9 @@ profile is selected.
 matches from the final bundle. With `fail_on_secrets = true`, `check` and `build`
 stop when a bundled text file resembles a private key, API token, or Telegram bot
 token. Use `cubkit lint` to check that the entrypoint has an MCUB `ModuleBase`/
-`Module` subclass or a function-style `register()` entrypoint.
+`Module` subclass or a function-style `main()`/`register()` entrypoint.
+External-import validation and automatic pre-build linting are configured with
+`[lint]`; see the full documentation for examples.
 
 Legacy flat manifests remain supported. Convert one with:
 

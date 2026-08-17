@@ -124,8 +124,144 @@ cubkit lint .
 ```
 
 The linter checks that `main.py` has a `ModuleBase`/`Module` subclass or a
-function-style `register()` entrypoint. It also warns about multiple module
+function-style `main()`/`register()` entrypoint. It also warns about multiple module
 classes and synchronous `@command` handlers.
+
+### External imports
+
+```toml
+[module]
+requires = ["aiohttp", "PyYAML"]
+
+[lint]
+check_imports = true
+strict_imports = true
+auto = true
+mcub_modules = ["core", "utils", "telethon", "loader"]
+runtime_modules = ["openagent_system_tool_api"]
+
+[lint.import_aliases]
+yaml = "PyYAML"
+PIL = "Pillow"
+Crypto = "pycryptodome"
+```
+
+The checker examines every Python file under `[bundle].source`, skips relative
+and project-local imports, Python's standard library, and configured MCUB
+modules. For every remaining import it checks that the top-level package is
+installed and declared in `[module].requires` or `[libs]`.
+
+```bash
+cubkit lint . --check-imports       # warnings do not fail lint
+cubkit lint . --check-imports --strict
+```
+
+`strict_imports = true` turns unknown, unavailable, and undeclared external
+imports into errors. `auto = true` runs the configured lint checks before every
+`cubkit build`; any lint error stops the build before an artifact is written.
+
+### Ruff, Black, and mypy
+
+CubKit can run installed external tools after its own AST rules. They remain
+optional dependencies: CubKit does not install them for the project.
+
+```toml
+[lint]
+auto = true
+strict_tools = true
+
+[lint.tools]
+ruff = true
+black = true
+mypy = false
+
+[lint.tools.debug]
+black = false
+
+[lint.tools.release]
+mypy = true
+```
+
+```bash
+cubkit lint .
+cubkit lint . --fix  # ruff --fix and Black formatting
+```
+
+Ruff runs `ruff check`, Black runs `black --check --diff`, and mypy runs on the
+configured source root. With `--fix`, Ruff and Black apply their supported fixes.
+An enabled but unavailable tool is a warning by default, or an error with
+`strict_tools = true`. Tool output is printed after the progress bar is cleared.
+`[lint.tools.debug]` and `[lint.tools.release]` override only the listed values,
+so the base configuration is inherited. Select them with `cubkit lint --debug`,
+`cubkit lint --release`, `cubkit build --debug`, or `cubkit build --release`.
+
+### MCUB handlers, locales, and hooks
+
+The default lint rules also verify that class-style `@command`, `@callback`,
+`@watcher`, and `@inline` handlers are async and accept `self, event`. Duplicate
+command names and aliases are reported as conflicts.
+
+For configured locales, CubKit discovers these string access forms:
+
+```python
+self.strings["title"]
+self.strings("welcome", name=user_name)
+self.strings.get("optional_key")
+```
+
+It reports missing keys, keys absent from one locale, inconsistent `{placeholder}`
+sets between locales, and required placeholders omitted from `self.strings(...)`.
+Hooks are linted too: paths such as `scripts/release.py` must exist and only the
+documented placeholders may be used.
+
+Control rules and exclude experimental files with:
+
+```toml
+[lint]
+enable = ["decorators", "locales", "hooks"]
+disable = ["hooks"]
+ignore = ["src/experimental/*.py"]
+```
+
+When `enable` is absent, all standard rules run. `disable` wins when a rule is in
+both lists. Suppress one intentional diagnostic directly on its source line:
+
+```python
+import experimental_sdk  # cubkit: ignore[external-import]
+```
+
+### Dependency and async checks
+
+Lint warns when an item in `[module].requires` is never imported:
+
+```text
+WARNING[unused-require] cubkit.toml:1: "pydantic" is declared in module.requires but never imported
+```
+
+It also detects common blocking calls inside `async def`: `time.sleep`,
+`requests.get`/`post`/`request`, `subprocess.run`/`call`/`check_output`, and
+`open`. These are warnings so they do not block a build by default. Disable the
+rule with `disable = ["async"]` when a synchronous operation is intentional.
+
+## Terminal output and automation
+
+CubKit shows an animated ASCII progress bar only when stderr is an interactive
+terminal. It stays visible for at least 0.1 seconds, then is cleared before the
+final result. In CI, redirected output, and pipes, CubKit emits stable one-line
+status messages instead; it never writes terminal control sequences there.
+
+Progress and statuses use stderr. The final result uses stdout, so scripts can
+reliably consume it:
+
+```bash
+artifact=$(cubkit build . --quiet)
+cubkit build . --format json
+cubkit lint . --format json
+```
+
+`--absolute-paths` switches human-readable paths from project-relative to
+absolute. `build --quiet` prints only its output path. Text output intentionally
+uses ASCII status markers (`OK`, `ERROR`) with one small completion emoji.
 
 Assets and locale directories are always resolved from the project root, not
 from `src`.

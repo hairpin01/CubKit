@@ -173,16 +173,17 @@ class CubKitTest(unittest.TestCase):
             self.assertEqual(main(["init", str(project)]), 0)
 
             stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(["build", str(project)]), 0)
 
-            output = stdout.getvalue()
-            self.assertIn("OK src/main.py", output)
-            self.assertIn("OK src/progress_mod_lib/__init__.py", output)
-            self.assertIn("OK src/progress_mod_lib/utils.py", output)
-            self.assertIn("/3", output)
-            self.assertIn("📐 Done! in ", output)
-            self.assertIn("built:", output)
+            progress = stderr.getvalue()
+            self.assertIn("OK src/main.py", progress)
+            self.assertIn("OK src/progress_mod_lib/__init__.py", progress)
+            self.assertIn("OK src/progress_mod_lib/utils.py", progress)
+            self.assertNotIn("\033", progress)
+            self.assertIn("📐 Done! in ", stdout.getvalue())
+            self.assertIn("Built dist/progress_mod.py", stdout.getvalue())
 
     def test_build_adds_manifest_metadata_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -739,13 +740,12 @@ class CubKitTest(unittest.TestCase):
             (project / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
 
             stdout = io.StringIO()
-            with contextlib.redirect_stdout(stdout):
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 self.assertEqual(main(["build", str(project)]), 0)
 
-            output = stdout.getvalue()
-            self.assertIn("collecting dependencies... statuslib", output)
-            self.assertIn("/1", output)
-            self.assertIn("📐 Done! in ", output)
+            self.assertIn("collecting dependencies... statuslib", stderr.getvalue())
+            self.assertIn("📐 Done! in ", stdout.getvalue())
 
     def test_package_pip_library_is_installed_and_vendored(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

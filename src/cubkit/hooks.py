@@ -5,12 +5,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import subprocess
+from typing import Callable
 
 from .errors import BuildError
 from .manifest import Manifest, find_manifest
 
 
-def run_hooks(manifest: Manifest, event: str, profile: str | None, output: Path | None = None) -> None:
+def run_hooks(
+    manifest: Manifest,
+    event: str,
+    profile: str | None,
+    output: Path | None = None,
+    status: Callable[[str], None] | None = None,
+    output_callback: Callable[[str], None] | None = None,
+) -> None:
     """Run common hooks and hooks specific to the selected build profile."""
 
     if manifest.hooks is None:
@@ -33,7 +41,20 @@ def run_hooks(manifest: Manifest, event: str, profile: str | None, output: Path 
         except KeyError as exc:
             raise BuildError(f"unknown hook placeholder: {exc.args[0]}") from exc
         try:
-            subprocess.run(argv, cwd=manifest.project_dir, env=environment, check=True)
+            if status is not None:
+                status(f"{event}: {' '.join(argv)}")
+            result = subprocess.run(
+                argv,
+                cwd=manifest.project_dir,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if result.stdout and output_callback is not None:
+                output_callback(result.stdout)
+            if result.returncode:
+                raise subprocess.CalledProcessError(result.returncode, argv)
         except FileNotFoundError as exc:
             raise BuildError(f"hook command not found: {argv[0]}") from exc
         except subprocess.CalledProcessError as exc:
