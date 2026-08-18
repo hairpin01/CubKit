@@ -112,6 +112,9 @@ External-import validation and automatic pre-build linting are configured with
 For a byte-identical artifact from unchanged inputs, use `cubkit build
 --reproducible`. It embeds the SHA-256 of the manifest in the generated file.
 
+Generate GitHub Actions validation with `cubkit github init`. GitHub annotations
+and SARIF are available through `cubkit lint --format github|sarif`.
+
 Legacy flat manifests remain supported. Convert one with:
 
 ```bash

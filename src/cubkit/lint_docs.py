@@ -35,6 +35,9 @@ _MCUB_RULES = {
     "invalid-loop-interval": "registration/loops.md",
     "manual-handler-registration": "registration/enhanced-api.md",
     "rich-media-id-mismatch": "inline/inline-form.md",
+    "network-without-timeout": "guides/best-practices.md#error-handling-pattern",
+    "session-created-per-request": "guides/best-practices.md#resource-management",
+    "task-reference-lost": "registration/lifecycle.md#cleanup-order-on-unload",
 }
 
 _SUGGESTIONS = {
@@ -75,11 +78,14 @@ _SUGGESTIONS = {
     "class-config-super-missing": "Add await super().on_load() to the class-style on_load override.",
     "config-default-invalid": "Choose a default accepted by the ConfigValue validator.",
     "duplicate-config-key": "Rename or remove the repeated ConfigValue key.",
-    "missing-handler-types": "Annotate event parameters with Event from core.lib.types.",
+    "missing-handler-types": "Use Event for commands/watchers/events and InlineMessage for callback handlers.",
     "inline-scope-missing": 'Set module.scope = "inline" in cubkit.toml.',
     "invalid-loop-interval": "Use a positive loop interval in seconds.",
     "manual-handler-registration": "Use kernel.register.event or watcher so MCUB cleans the handler on unload.",
     "rich-media-id-mismatch": "Add every tg://...id to rich_media or correct the HTML id.",
+    "network-without-timeout": "Pass an explicit timeout to the HTTP request.",
+    "session-created-per-request": "Create one ClientSession during module startup and close it during unload.",
+    "task-reference-lost": "Store the task on the module or in a task set and cancel it during unload.",
 }
 
 

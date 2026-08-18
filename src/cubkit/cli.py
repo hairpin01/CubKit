@@ -14,9 +14,11 @@ import time
 from . import __version__
 from .builder import build_project, check_project
 from .errors import CubKitError
+from .github import initialize_github_actions
+from .lint_output import render_github_annotations, render_sarif
 from .migration import migrate_manifest
 from .manifest import load_manifest
-from .linter import lint_project
+from .linter import git_changed_files, lint_project
 from .types_sync import sync_mcub_types
 
 
@@ -49,7 +51,9 @@ def _make_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--id", dest="module_id", help="module id; defaults to the directory name"
     )
-    init_parser.add_argument("--force", action="store_true", help="replace existing starter files")
+    init_parser.add_argument(
+        "--force", action="store_true", help="replace existing starter files"
+    )
     init_parser.set_defaults(func=_cmd_init)
 
     check_parser = subparsers.add_parser(
@@ -65,7 +69,11 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     build_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     build_parser.add_argument("-o", "--output", type=Path, help="output .py path")
-    build_parser.add_argument("--reproducible", action="store_true", help="verify deterministic output and embed manifest hash")
+    build_parser.add_argument(
+        "--reproducible",
+        action="store_true",
+        help="verify deterministic output and embed manifest hash",
+    )
     _add_profile_arguments(build_parser)
     _add_output_arguments(build_parser, quiet=True)
     build_parser.set_defaults(func=_cmd_build)
@@ -73,10 +81,26 @@ def _make_parser() -> argparse.ArgumentParser:
     lint_parser = subparsers.add_parser("lint", help="check an MCUB module entrypoint")
     lint_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     _add_profile_arguments(lint_parser)
-    _add_output_arguments(lint_parser, quiet=False)
-    lint_parser.add_argument("--check-imports", action="store_true", help="validate non-local imports")
-    lint_parser.add_argument("--strict", action="store_true", help="treat import warnings as errors")
-    lint_parser.add_argument("--fix", action="store_true", help="apply supported external tool fixes")
+    _add_output_arguments(
+        lint_parser, quiet=False, formats=("text", "json", "github", "sarif")
+    )
+    lint_parser.add_argument(
+        "--check-imports", action="store_true", help="validate non-local imports"
+    )
+    lint_parser.add_argument(
+        "--strict", action="store_true", help="treat import warnings as errors"
+    )
+    lint_parser.add_argument(
+        "--fix", action="store_true", help="apply supported external tool fixes"
+    )
+    lint_parser.add_argument(
+        "--changed",
+        action="store_true",
+        help="lint only files changed relative to Git HEAD",
+    )
+    lint_parser.add_argument(
+        "--no-cache", action="store_true", help="disable the persistent lint cache"
+    )
     lint_parser.set_defaults(func=_cmd_lint)
 
     types_parser = subparsers.add_parser(
@@ -90,21 +114,63 @@ def _make_parser() -> argparse.ArgumentParser:
     )
     migrate_parser.add_argument("path", type=Path, nargs="?", default=Path.cwd())
     migrate_parser.set_defaults(func=_cmd_migrate)
+
+    github_parser = subparsers.add_parser("github", help="manage GitHub integration")
+    github_subparsers = github_parser.add_subparsers(
+        dest="github_command", required=True
+    )
+    github_init = github_subparsers.add_parser(
+        "init", help="create the CubKit GitHub Actions workflow"
+    )
+    github_init.add_argument("path", type=Path, nargs="?", default=Path.cwd())
+    github_init.add_argument(
+        "--force", action="store_true", help="replace an existing workflow"
+    )
+    github_init.set_defaults(func=_cmd_github_init)
     return parser
 
 
 def _add_profile_arguments(parser: argparse.ArgumentParser) -> None:
     profiles = parser.add_mutually_exclusive_group()
-    profiles.add_argument("--debug", action="store_const", const="debug", dest="profile", help="use debug output and hooks")
-    profiles.add_argument("--release", action="store_const", const="release", dest="profile", help="use release output and hooks")
+    profiles.add_argument(
+        "--debug",
+        action="store_const",
+        const="debug",
+        dest="profile",
+        help="use debug output and hooks",
+    )
+    profiles.add_argument(
+        "--release",
+        action="store_const",
+        const="release",
+        dest="profile",
+        help="use release output and hooks",
+    )
 
 
-def _add_output_arguments(parser: argparse.ArgumentParser, *, quiet: bool) -> None:
-    parser.add_argument("--skip-hooks", action="store_true", help="do not run configured hooks")
-    parser.add_argument("--format", choices=("text", "json"), dest="output_format", default="text", help="output format")
-    parser.add_argument("--absolute-paths", action="store_true", help="show absolute paths")
+def _add_output_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    quiet: bool,
+    formats: tuple[str, ...] = ("text", "json"),
+) -> None:
+    parser.add_argument(
+        "--skip-hooks", action="store_true", help="do not run configured hooks"
+    )
+    parser.add_argument(
+        "--format",
+        choices=formats,
+        dest="output_format",
+        default="text",
+        help="output format",
+    )
+    parser.add_argument(
+        "--absolute-paths", action="store_true", help="show absolute paths"
+    )
     if quiet:
-        parser.add_argument("--quiet", action="store_true", help="print only the output path")
+        parser.add_argument(
+            "--quiet", action="store_true", help="print only the output path"
+        )
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
@@ -121,26 +187,42 @@ def _cmd_init(args: argparse.Namespace) -> int:
         _manifest_template(module_id, project_dir.name, package_name),
         force=args.force,
     )
-    written += _write_new(source_dir / "main.py", _entrypoint_template(package_name), force=args.force)
+    written += _write_new(
+        source_dir / "main.py", _entrypoint_template(package_name), force=args.force
+    )
     written += _write_new(
         source_dir / package_name / "__init__.py",
         '"""Private package for this MCUB module."""\n',
         force=args.force,
     )
-    written += _write_new(source_dir / package_name / "utils.py", _utils_template(), force=args.force)
+    written += _write_new(
+        source_dir / package_name / "utils.py", _utils_template(), force=args.force
+    )
     print(f"OK {len(written)} starter file(s) in {project_dir}")
     return 0
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    reporter = _ProgressReporter(args.path.resolve(), enabled=args.output_format == "text")
+    reporter = _ProgressReporter(
+        args.path.resolve(), enabled=args.output_format == "text"
+    )
     try:
-        count = check_project(args.path, profile=args.profile, run_configured_hooks=not args.skip_hooks, status=reporter.status, hook_output=reporter.capture_output)
+        count = check_project(
+            args.path,
+            profile=args.profile,
+            run_configured_hooks=not args.skip_hooks,
+            status=reporter.status,
+            hook_output=reporter.capture_output,
+        )
     finally:
         reporter.finish()
     path = _display_path(args.path.resolve(), args.path.resolve(), args.absolute_paths)
     if args.output_format == "json":
-        print(json.dumps({"ok": True, "path": str(args.path.resolve()), "embedded_files": count}))
+        print(
+            json.dumps(
+                {"ok": True, "path": str(args.path.resolve()), "embedded_files": count}
+            )
+        )
     else:
         print(f"OK {path} ({count} embedded file(s))")
     return 0
@@ -148,7 +230,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 def _cmd_build(args: argparse.Namespace) -> int:
     project_dir = args.path.resolve()
-    reporter = _ProgressReporter(project_dir, enabled=args.output_format == "text" and not args.quiet)
+    reporter = _ProgressReporter(
+        project_dir, enabled=args.output_format == "text" and not args.quiet
+    )
     try:
         output = build_project(
             project_dir,
@@ -168,7 +252,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
     displayed = _display_path(output, project_dir, args.absolute_paths)
     elapsed = time.monotonic() - reporter.started
     if args.output_format == "json":
-        print(json.dumps({"ok": True, "output": str(output), "profile": args.profile or "default", "duration_seconds": round(elapsed, 3)}))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "output": str(output),
+                    "profile": args.profile or "default",
+                    "duration_seconds": round(elapsed, 3),
+                }
+            )
+        )
     elif args.quiet:
         print(displayed)
     else:
@@ -179,33 +272,78 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
 def _cmd_lint(args: argparse.Namespace) -> int:
     manifest = load_manifest(args.path)
-    issues = lint_project(
-        manifest,
-        check_imports=True if args.check_imports or args.strict else None,
-        strict_imports=True if args.strict else None,
-        tool_output=lambda text: print(text, end="", file=sys.stderr),
-        fix=args.fix,
-        profile=args.profile,
+    reporter = _ProgressReporter(
+        manifest.project_dir, enabled=args.output_format == "text"
     )
-    errors = [issue for issue in issues if issue.severity == "error"]
-    if not issues:
-        if args.output_format == "json":
-            print(json.dumps({"ok": True, "path": str(manifest.entrypoint), "issues": []}))
+    try:
+        changed = git_changed_files(manifest) if args.changed else None
+        if changed is not None and not changed:
+            reporter.status("no changed Python files")
+            issues = []
         else:
-            print(f"OK {_display_path(manifest.entrypoint, manifest.project_dir, args.absolute_paths)}")
-        return 0
+            issues = lint_project(
+                manifest,
+                check_imports=True if args.check_imports or args.strict else None,
+                strict_imports=True if args.strict else None,
+                progress=reporter.progress,
+                tool_output=reporter.capture_output,
+                fix=args.fix,
+                profile=args.profile,
+                only_paths=changed,
+                use_cache=not args.no_cache,
+            )
+    finally:
+        reporter.finish()
+    errors = [issue for issue in issues if issue.severity == "error"]
     if args.output_format == "json":
-        print(json.dumps({"ok": not errors, "path": str(manifest.entrypoint), "issues": [issue.__dict__ for issue in issues]}, default=str))
-    else:
-        path = _display_path(manifest.entrypoint, manifest.project_dir, args.absolute_paths)
-        for issue in issues:
-            print(f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}", file=sys.stderr)
-            print(f"  Fix: {issue.suggestion}", file=sys.stderr)
-            print(f"  Docs: {issue.docs_url}", file=sys.stderr)
-            if issue.mcub_docs_url is not None:
-                print(f"  MCUB: {issue.mcub_docs_url}", file=sys.stderr)
-        print(f"lint: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)", file=sys.stderr)
+        print(
+            json.dumps(
+                {
+                    "ok": not errors,
+                    "path": str(manifest.entrypoint),
+                    "issues": [issue.__dict__ for issue in issues],
+                },
+                default=str,
+            )
+        )
+        return 1 if errors else 0
+    if args.output_format == "github":
+        rendered = render_github_annotations(issues, manifest.project_dir)
+        if rendered:
+            print(rendered)
+        return 1 if errors else 0
+    if args.output_format == "sarif":
+        print(
+            json.dumps(render_sarif(issues, manifest.project_dir), ensure_ascii=False)
+        )
+        return 1 if errors else 0
+    if not issues:
+        print(
+            f"OK {_display_path(manifest.project_dir, manifest.project_dir, args.absolute_paths)}"
+        )
+        return 0
+    for issue in issues:
+        issue_path = issue.path or manifest.entrypoint
+        path = _display_path(issue_path, manifest.project_dir, args.absolute_paths)
+        print(
+            f"{issue.severity.upper()}[{issue.code}] {path}:{issue.line}: {issue.message}",
+            file=sys.stderr,
+        )
+        print(f"  Fix: {issue.suggestion}", file=sys.stderr)
+        print(f"  Docs: {issue.docs_url}", file=sys.stderr)
+        if issue.mcub_docs_url is not None:
+            print(f"  MCUB: {issue.mcub_docs_url}", file=sys.stderr)
+    print(
+        f"lint: {len(errors)} error(s), {len(issues) - len(errors)} warning(s)",
+        file=sys.stderr,
+    )
     return 1 if errors else 0
+
+
+def _cmd_github_init(args: argparse.Namespace) -> int:
+    output = initialize_github_actions(args.path, force=args.force)
+    print(f"OK {_display_path(output, args.path.resolve(), False)}")
+    return 0
 
 
 def _cmd_types(args: argparse.Namespace) -> int:
@@ -217,7 +355,9 @@ def _cmd_types(args: argparse.Namespace) -> int:
         except ValueError:
             label = path.as_posix()
         print(f"OK {label}")
-    print(f"types: downloaded {len(written)} file(s) into {project_dir / 'core' / 'lib' / 'types'}")
+    print(
+        f"types: downloaded {len(written)} file(s) into {project_dir / 'core' / 'lib' / 'types'}"
+    )
     print("gitignore: core/")
     return 0
 
@@ -291,12 +431,16 @@ class _ProgressReporter:
 
     def dependency(self, name: str, index: int, total: int) -> None:
         with self._lock:
-            self._set_progress_locked(f"collecting dependencies... {name}", index, total)
+            self._set_progress_locked(
+                f"collecting dependencies... {name}", index, total
+            )
             self._render_locked()
 
     def finish(self) -> None:
         if self._interactive and self._visible_since is not None:
-            remaining = self._MIN_VISIBLE_SECONDS - (time.monotonic() - self._visible_since)
+            remaining = self._MIN_VISIBLE_SECONDS - (
+                time.monotonic() - self._visible_since
+            )
             if remaining > 0:
                 time.sleep(remaining)
         self._stop.set()
@@ -359,7 +503,9 @@ class _ProgressReporter:
         suffix = "" if total <= 0 else f" {index}/{max(total, 1)}"
         label = _collapse_spaces(label)
         width = max(20, shutil.get_terminal_size((80, 20)).columns)
-        line = self._format_progress_line(label, spinner, elapsed_text, suffix, index, total, width)
+        line = self._format_progress_line(
+            label, spinner, elapsed_text, suffix, index, total, width
+        )
         return line
 
     def _format_progress_line(
@@ -376,8 +522,14 @@ class _ProgressReporter:
         prefix = f"{label} {spinner} {elapsed_text} "
         available = width - len(prefix) - len(suffix) - 3
         if available < self._MIN_BAR_WIDTH:
-            label = _fit_label(label, max(0, len(label) + available - self._MIN_BAR_WIDTH))
-            prefix = f"{label} {spinner} {elapsed_text} " if label else f"{spinner} {elapsed_text} "
+            label = _fit_label(
+                label, max(0, len(label) + available - self._MIN_BAR_WIDTH)
+            )
+            prefix = (
+                f"{label} {spinner} {elapsed_text} "
+                if label
+                else f"{spinner} {elapsed_text} "
+            )
             available = width - len(prefix) - len(suffix) - 3
         bar_width = max(1, min(self._BAR_WIDTH, available))
         bar = self._bar(index, total, bar_width)

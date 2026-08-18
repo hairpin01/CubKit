@@ -18,6 +18,7 @@ from cubkit.collector import collect_bundle_files  # noqa: E402
 from cubkit.errors import BuildError  # noqa: E402
 from cubkit.manifest import load_manifest  # noqa: E402
 from cubkit.linter import lint_project  # noqa: E402
+from cubkit.rules import RULES  # noqa: E402
 
 
 class CubKitFeaturesTest(unittest.TestCase):
@@ -306,6 +307,288 @@ strict_imports = true
                 self.assertEqual(main(["lint", str(project)]), 0)
             self.assertNotIn("command-without-docs", stderr.getvalue())
 
+    def test_lint_accepts_inline_message_for_callback_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """class Demo(ModuleBase):
+    @callback
+    async def handle(self, call: InlineMessage):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("missing-handler-types", stderr.getvalue())
+
+    def test_lint_accepts_context_managed_client_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """import aiohttp
+
+async def main():
+    async with aiohttp.ClientSession() as session:
+        await session.get("https://example.com")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("missing-cleanup", stderr.getvalue())
+
+    def test_cli_lint_reports_progress_and_checks_all_source_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/extra.py").write_text(
+                'TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"\n',
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 1)
+            output = stderr.getvalue()
+            self.assertIn("linting sources", output)
+            self.assertIn("src/extra.py", output)
+            self.assertIn("hardcoded-token", output)
+
+    def test_rule_registry_has_metadata_and_unique_ids(self) -> None:
+        self.assertEqual(len(RULES), len({rule.id for rule in RULES}))
+        self.assertTrue(
+            all(rule.level and rule.description and rule.fix for rule in RULES)
+        )
+        self.assertTrue(all(callable(rule.check) for rule in RULES))
+
+    def test_lint_resolves_aliases_and_inferred_session_types(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """import aiohttp as http
+
+async def main():
+    async with http.ClientSession() as client:
+        await client.get("https://example.com")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertIn("network-without-timeout", stderr.getvalue())
+            self.assertNotIn("missing-cleanup", stderr.getvalue())
+
+    def test_lint_accepts_client_session_default_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """import aiohttp
+
+async def main():
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        await session.get("https://example.com")
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project), "--no-cache"]), 0)
+            self.assertNotIn("network-without-timeout", stderr.getvalue())
+
+    def test_lint_accepts_try_finally_session_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """from aiohttp import ClientSession as Session
+
+async def main():
+    session = Session()
+    try:
+        await session.get("https://example.com", timeout=10)
+    finally:
+        await session.close()
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("missing-cleanup", stderr.getvalue())
+
+    def test_lint_detects_per_handler_sessions_and_lost_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text(
+                """import asyncio as aio
+from aiohttp import ClientSession as Session
+
+class Demo(ModuleBase):
+    @command("ping", doc_en="Ping")
+    async def ping(self, event: Event):
+        async with Session() as session:
+            await session.get("https://example.com", timeout=10)
+        aio.create_task(self.worker())
+
+    async def worker(self):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            output = stderr.getvalue()
+            self.assertIn("session-created-per-request", output)
+            self.assertIn("task-reference-lost", output)
+
+    def test_lint_understands_cross_file_module_inheritance_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/base.py").write_text(
+                """class Base(ModuleBase):
+    async def on_unload(self):
+        pass
+""",
+                encoding="utf-8",
+            )
+            (project / "src/main.py").write_text(
+                """import asyncio
+from .base import Base
+
+class Demo(Base):
+    async def start(self):
+        self.task = asyncio.create_task(self.worker())
+
+    async def worker(self):
+        pass
+""",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["lint", str(project)]), 0)
+            self.assertNotIn("mcub-entrypoint", stderr.getvalue())
+            self.assertNotIn("missing-cleanup", stderr.getvalue())
+
+    def test_lint_cache_uses_source_and_rules_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            manifest = load_manifest(project)
+            cache = project / "lint-cache.json"
+            with patch("cubkit.linter._cache_path", return_value=cache):
+                lint_project(manifest, progress=lambda *_: None)
+                progress: list[str] = []
+                lint_project(
+                    manifest,
+                    progress=lambda label, *_: progress.append(label),
+                )
+                self.assertEqual(progress, ["lint cache hit"])
+
+                (project / "src/main.py").write_text(
+                    "def main():\n    return 1\n", encoding="utf-8"
+                )
+                progress.clear()
+                lint_project(
+                    load_manifest(project),
+                    progress=lambda label, *_: progress.append(label),
+                )
+                self.assertNotEqual(progress, ["lint cache hit"])
+
+    def test_cli_changed_lints_only_selected_python_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            extra = project / "src/extra.py"
+            extra.write_text(
+                'TOKEN = "123456789:abcdefghijklmnopqrstuvwxyzABCDE"\n',
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with (
+                patch("cubkit.cli.git_changed_files", return_value={extra.resolve()}),
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                self.assertEqual(
+                    main(["lint", str(project), "--changed", "--no-cache"]), 1
+                )
+            output = stderr.getvalue()
+            self.assertIn("src/extra.py", output)
+            self.assertNotIn("src/main.py", output)
+
+    def test_github_init_generates_validation_release_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(main(["github", "init", str(project)]), 0)
+            workflow = project / ".github/workflows/cubkit.yml"
+            text = workflow.read_text(encoding="utf-8")
+            self.assertIn("cubkit lint . --release --format sarif", text)
+            self.assertIn("--release --reproducible", text)
+            self.assertIn("github/codeql-action/upload-sarif@v3", text)
+            self.assertIn("actions/upload-artifact@v4", text)
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                self.assertEqual(main(["github", "init", str(project)]), 1)
+            self.assertIn("already exists", stderr.getvalue())
+
+    def test_lint_github_format_emits_annotations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(
+                    main(
+                        [
+                            "lint",
+                            str(project),
+                            "--format",
+                            "github",
+                            "--no-cache",
+                        ]
+                    ),
+                    1,
+                )
+            output = stdout.getvalue()
+            self.assertIn(
+                "::error file=src/main.py,line=1,title=mcub-entrypoint::", output
+            )
+            self.assertIn("Docs:", output)
+
+    def test_lint_sarif_format_is_valid_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = self._project(Path(tmp))
+            (project / "src/main.py").write_text("VALUE = 1\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(
+                    main(
+                        [
+                            "lint",
+                            str(project),
+                            "--format",
+                            "sarif",
+                            "--no-cache",
+                        ]
+                    ),
+                    1,
+                )
+            sarif = json.loads(stdout.getvalue())
+            self.assertEqual(sarif["version"], "2.1.0")
+            result = sarif["runs"][0]["results"][0]
+            self.assertEqual(result["ruleId"], "mcub-entrypoint")
+            self.assertEqual(
+                result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+                "src/main.py",
+            )
+
     def test_lint_checks_locale_accesses_and_placeholders(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = self._project(Path(tmp))
@@ -371,7 +654,7 @@ pre_build = ["python", "scripts/{unknown}.py"]
             )
             stderr = io.StringIO()
             with (
-                patch("cubkit.linter.shutil.which", return_value=None),
+                patch("cubkit.rules.shutil.which", return_value=None),
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["lint", str(project)]), 1)
@@ -524,7 +807,7 @@ class Demo(ModuleBase):
             )
             stderr = io.StringIO()
             with (
-                patch("cubkit.linter.importlib.metadata.version", return_value="1.0"),
+                patch("cubkit.rules.importlib.metadata.version", return_value="1.0"),
                 contextlib.redirect_stderr(stderr),
             ):
                 self.assertEqual(main(["lint", str(project)]), 1)

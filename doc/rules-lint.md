@@ -173,8 +173,9 @@ Every key inside one `ModuleConfig` must be unique.
 
 ## missing-handler-types
 
-Annotate MCUB event parameters with `Event` from `core.lib.types` for editor and
-type-checker support.
+Annotate commands, watchers, and event handlers with `Event`. Callback handlers
+receive `InlineMessage`, not a raw `Event`; both types are exported from
+`core.lib.types`.
 
 ## inline-scope-missing
 
@@ -194,3 +195,18 @@ handlers are tracked and removed automatically during unload.
 
 Every `tg://media`, `tg://photo`, `tg://video`, `tg://audio`, or
 `tg://document` id in literal rich HTML must exist in the `rich_media` mapping.
+
+## network-without-timeout
+
+HTTP requests should specify a finite timeout so a stalled endpoint cannot block
+the module indefinitely.
+
+## session-created-per-request
+
+Do not construct a new `aiohttp.ClientSession` for every command, callback,
+watcher, or event. Reuse a module-level session and close it during unload.
+
+## task-reference-lost
+
+Store tasks returned by `asyncio.create_task()` so they can be inspected,
+cancelled, and awaited during module unload.

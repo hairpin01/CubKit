@@ -263,6 +263,55 @@ cubkit lint . --format json
 absolute. `build --quiet` prints only its output path. Text output intentionally
 uses ASCII status markers (`OK`, `ERROR`) with one small completion emoji.
 
+### Lint cache and changed files
+
+CubKit stores lint results under the platform cache directory using the project
+path as a key. The fingerprint contains SHA-256 hashes for every source file,
+the manifest, the complete `rules.py`, Python version, selected profile, and the
+installed-package environment when import checks are enabled. An unchanged
+project is returned directly from cache without AST parsing or rule execution.
+Caching is bypassed for `--fix`, `--changed`, and profiles with external lint
+tools enabled, because those tools may change independently of source hashes.
+
+```bash
+cubkit lint .                 # persistent cache enabled
+cubkit lint . --no-cache      # force a full analysis
+cubkit lint . --changed       # tracked changes vs Git HEAD + untracked files
+```
+
+`--changed` still parses the project structure for inheritance and local-import
+context, but file-local rules run only for changed Python files. This preserves
+cross-file MCUB analysis while avoiding repeated rule execution.
+
+## GitHub Actions and Code Scanning
+
+```bash
+cubkit github init
+```
+
+This creates `.github/workflows/cubkit.yml`. The workflow installs CubKit, emits
+SARIF lint diagnostics, uploads them to GitHub Code Scanning, builds the release
+profile twice with `--reproducible`, compares both artifacts, and uploads the
+resulting module through `actions/upload-artifact`.
+
+Existing workflows are preserved unless explicitly replaced:
+
+```bash
+cubkit github init --force
+```
+
+For custom workflows, use either machine-readable lint format directly:
+
+```bash
+cubkit lint . --format github  # ::error / ::warning workflow commands
+cubkit lint . --format sarif   # SARIF 2.1.0 JSON on stdout
+```
+
+Both formats keep stdout clean and disable the interactive progress display.
+GitHub annotations contain the source file, line, rule ID, remediation, and
+CubKit documentation URL. SARIF additionally publishes the complete rule
+registry for GitHub's code-scanning UI.
+
 ### Reproducible builds
 
 ```bash
