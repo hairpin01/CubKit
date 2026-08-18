@@ -15,7 +15,7 @@ __all__ = [
     "root",
 ]
 
-__version__ = "0.1.3"
+__version__ = "0.2.6"
 assets: Any = None
 metadata: Mapping[str, Any] = MappingProxyType({})
 root: Path | None = None
